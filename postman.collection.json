@@ -1,0 +1,184 @@
+{
+	"info": {
+		"name": "Backend Boilerplate",
+		"description": "Auth (Better Auth + OTP) and User module routes for the reusable backend boilerplate. Import this and just change `baseUrl` for each new project.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{ "key": "baseUrl", "value": "http://localhost:5000" },
+		{ "key": "email", "value": "testuser@example.com" },
+		{ "key": "password", "value": "TestPass123" },
+		{ "key": "otp", "value": "" },
+		{ "key": "userId", "value": "" }
+	],
+	"item": [
+		{
+			"name": "Health",
+			"item": [
+				{
+					"name": "Root",
+					"request": { "method": "GET", "url": "{{baseUrl}}/" }
+				},
+				{
+					"name": "Health Check",
+					"request": { "method": "GET", "url": "{{baseUrl}}/health" }
+				}
+			]
+		},
+		{
+			"name": "Auth",
+			"item": [
+				{
+					"name": "1. Register",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/api/v1/auth/register",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Test User\",\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+						}
+					}
+				},
+				{
+					"name": "2. Send Email Verification OTP",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/api/v1/auth/send-otp",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"{{email}}\",\n  \"type\": \"email-verification\"\n}"
+						}
+					}
+				},
+				{
+					"name": "3. Verify Email OTP",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/api/v1/auth/verify-email-otp",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"{{email}}\",\n  \"otp\": \"{{otp}}\"\n}"
+						}
+					}
+				},
+				{
+					"name": "4. Login",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/api/v1/auth/login",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+						}
+					}
+				},
+				{
+					"name": "5. Get Me",
+					"request": {
+						"method": "GET",
+						"url": "{{baseUrl}}/api/v1/auth/me"
+					}
+				},
+				{
+					"name": "6. Forgot Password - Send OTP",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/api/v1/auth/send-otp",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"{{email}}\",\n  \"type\": \"forget-password\"\n}"
+						}
+					}
+				},
+				{
+					"name": "7. Reset Password with OTP",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/api/v1/auth/reset-password-otp",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"{{email}}\",\n  \"otp\": \"{{otp}}\",\n  \"newPassword\": \"NewTestPass456\"\n}"
+						}
+					}
+				},
+				{
+					"name": "8. Change Password",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/api/v1/auth/change-password",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"currentPassword\": \"{{password}}\",\n  \"newPassword\": \"NewTestPass456\"\n}"
+						}
+					}
+				},
+				{
+					"name": "9. Logout",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/api/v1/auth/logout"
+					}
+				}
+			]
+		},
+		{
+			"name": "Users",
+			"item": [
+				{
+					"name": "Get My Profile",
+					"request": { "method": "GET", "url": "{{baseUrl}}/api/v1/users/me" }
+				},
+				{
+					"name": "Update My Profile (JSON only)",
+					"request": {
+						"method": "PATCH",
+						"url": "{{baseUrl}}/api/v1/users/me",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"data\": \"{\\\"name\\\": \\\"Updated Name\\\", \\\"phone\\\": \\\"01700000000\\\"}\"\n}"
+						},
+						"description": "This route uses validateRequestWithFile — JSON fields must be stringified inside a 'data' field. To also upload an image, switch body mode to form-data: add a 'data' text field with the same JSON string, and an 'image' file field."
+					}
+				},
+				{
+					"name": "Get All Users (Admin)",
+					"request": { "method": "GET", "url": "{{baseUrl}}/api/v1/users?page=1&limit=10" }
+				},
+				{
+					"name": "Get User By Id (Admin)",
+					"request": { "method": "GET", "url": "{{baseUrl}}/api/v1/users/{{userId}}" }
+				},
+				{
+					"name": "Update User Role (Admin)",
+					"request": {
+						"method": "PATCH",
+						"url": "{{baseUrl}}/api/v1/users/{{userId}}/role",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": { "mode": "raw", "raw": "{\n  \"role\": \"ADMIN\"\n}" }
+					}
+				},
+				{
+					"name": "Update User Status (Admin)",
+					"request": {
+						"method": "PATCH",
+						"url": "{{baseUrl}}/api/v1/users/{{userId}}/status",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": { "mode": "raw", "raw": "{\n  \"isActive\": false\n}" }
+					}
+				},
+				{
+					"name": "Delete User (Super Admin)",
+					"request": { "method": "DELETE", "url": "{{baseUrl}}/api/v1/users/{{userId}}" }
+				}
+			]
+		}
+	]
+}

@@ -1,0 +1,943 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  ADMIN
+  RECRUITER
+  CANDIDATE
+}
+
+enum AuthProvider {
+  EMAIL
+  GOOGLE
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING
+}
+
+enum AssessmentStatus {
+  DRAFT
+  PUBLISHED
+  ACTIVE
+  CLOSED
+  ARCHIVED
+}
+
+enum ProblemType {
+  MCQ
+  CODING
+  WRITTEN
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum McqType {
+  SINGLE_CHOICE
+  MULTIPLE_CHOICE
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
+  COMPLETED
+}
+
+enum AttemptStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  SUBMITTED
+  AUTO_SUBMITTED
+  EVALUATED
+  EXPIRED
+}
+
+enum SubmissionStatus {
+  DRAFT
+  SUBMITTED
+  EVALUATING
+  EVALUATED
+  FAILED
+}
+
+enum EvaluationStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+}
+
+enum ResultStatus {
+  PENDING
+  PASSED
+  FAILED
+}
+
+enum SubscriptionPlan {
+  FREE
+  PRO
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELLED
+  EXPIRED
+  PAST_DUE
+}
+
+enum PaymentProvider {
+  STRIPE
+  BKASH
+  SSLCOMMERZ
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+enum NotificationType {
+  ASSESSMENT_INVITATION
+  ASSESSMENT_REMINDER
+  ASSESSMENT_RESULT
+  ATTEMPT_SUBMITTED
+  ATTEMPT_EVALUATED
+  PAYMENT_SUCCESS
+  PAYMENT_FAILED
+  SYSTEM
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  STATUS_CHANGE
+  ROLE_CHANGE
+  PAYMENT
+  SUBMISSION
+  EVALUATION
+  SECURITY
+}
+
+enum ProctoringEventType {
+  TAB_SWITCH
+  FULLSCREEN_EXIT
+  COPY
+  PASTE
+  DEVTOOLS_DETECTED
+  CAMERA_BLOCKED
+  MICROPHONE_BLOCKED
+  WINDOW_BLUR
+  WINDOW_FOCUS
+  OTHER
+}
+
+enum ConsentType {
+  MARKETING
+  ANALYTICS
+  THIRD_PARTY
+  PRIVACY_POLICY
+  TERMS_OF_SERVICE
+}
+
+// Better Auth is the single source of truth for credentials, sessions, and
+// verification tokens (Account / Session / Verification below). Do not add
+// password fields back onto User.
+model User {
+  id    String  @id @default(cuid())
+  name  String
+  email String  @unique @db.VarChar(320)
+  image String?
+  phone String?
+
+  role     UserRole     @default(CANDIDATE)
+  status   UserStatus   @default(ACTIVE)
+  provider AuthProvider @default(EMAIL)
+
+  emailVerified Boolean @default(false)
+
+  // Set/read exclusively by the Better Auth twoFactor plugin — do not toggle manually.
+  twoFactorEnabled Boolean @default(false)
+
+  lastLoginAt DateTime? @db.Timestamptz(3)
+
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  company Company?
+
+  accounts   Account[]
+  sessions   Session[]
+  twoFactors TwoFactor[]
+
+  consents UserConsent[]
+
+  candidateProfile CandidateProfile?
+
+  assessmentsCreated Assessment[] @relation("AssessmentCreator")
+
+  invitations AssessmentInvitation[] @relation("CandidateInvitations")
+  attempts    AssessmentAttempt[]    @relation("CandidateAttempts")
+
+  problemsCreated Problem[] @relation("ProblemCreator")
+
+  evaluations SubmissionEvaluation[] @relation("SubmissionEvaluator")
+
+  payments      Payment[]
+  notifications Notification[]
+  auditLogs     AuditLog[]
+
+  @@index([role])
+  @@index([status])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+// providerId is a plain string ("credential", "google", ...) — matches what
+// the Better Auth adapter writes, so do not replace it with an enum.
+// issuer is required by Better Auth 1.7+ (e.g. "local:credential",
+// "local:oauth:google"); uniqueness is on (issuer, accountId).
+model Account {
+  id         String @id @default(cuid())
+  userId     String
+  accountId  String
+  providerId String
+  issuer     String
+
+  password String?
+
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([issuer, accountId])
+  @@index([userId])
+  @@index([providerId])
+  @@map("accounts")
+}
+
+model TwoFactor {
+  id          String  @id @default(cuid())
+  userId      String
+  secret      String
+  backupCodes String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId])
+  @@map("two_factors")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime @db.Timestamptz(3)
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([identifier, value])
+  @@index([identifier])
+  @@index([expiresAt])
+  @@map("verifications")
+}
+
+// ownerId is required + Restrict: a company must always have an owner.
+// To delete an owner, transfer ownership first, then delete the old user.
+// Do not switch this to SetNull.
+model Company {
+  id String @id @default(cuid())
+
+  name        String
+  slug        String  @unique
+  description String?
+
+  website  String?
+  industry String?
+  logo     String?
+
+  isVerified Boolean @default(false)
+
+  ownerId String @unique
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  assessments  Assessment[]
+  problems     Problem[]
+  subscription Subscription?
+  payments     Payment[]
+
+  @@index([deletedAt])
+  @@map("companies")
+}
+
+model CandidateProfile {
+  id String @id @default(cuid())
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  headline     String?
+  bio          String?
+  phone        String?
+  location     String?
+  resumeUrl    String?
+  linkedinUrl  String?
+  githubUrl    String?
+  portfolioUrl String?
+
+  skills          Json?
+  experienceYears Int?
+
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([deletedAt])
+  @@map("candidate_profiles")
+}
+
+model Assessment {
+  id String @id @default(cuid())
+
+  title String
+  slug  String
+
+  description  String?
+  instructions String?
+
+  durationMinutes Int
+
+  totalMarks   Int
+  passingMarks Int
+
+  maxAttempts Int @default(1)
+
+  status AssessmentStatus @default(DRAFT)
+
+  startAt     DateTime? @db.Timestamptz(3)
+  endAt       DateTime? @db.Timestamptz(3)
+  publishedAt DateTime? @db.Timestamptz(3)
+
+  shuffleQuestions      Boolean @default(false)
+  showResultImmediately Boolean @default(false)
+  allowReview           Boolean @default(true)
+
+  version         Int     @default(1)
+  isLatestVersion Boolean @default(true)
+
+  parentAssessmentId String?
+  parentAssessment   Assessment?  @relation("AssessmentVersions", fields: [parentAssessmentId], references: [id], onDelete: SetNull)
+  childVersions      Assessment[] @relation("AssessmentVersions")
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  createdById String
+  createdBy   User   @relation("AssessmentCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  assessmentProblems AssessmentProblem[]
+  invitations        AssessmentInvitation[]
+  attempts           AssessmentAttempt[]
+  results            Result[]
+
+  @@unique([companyId, slug, version])
+  @@index([companyId, createdAt])
+  @@index([companyId, status])
+  @@index([companyId, isLatestVersion])
+  @@index([createdById])
+  @@index([status, startAt, endAt])
+  @@index([deletedAt])
+  @@map("assessments")
+}
+
+// Multi-tenant: companyId scopes every private problem. Application layer
+// must verify problem.companyId === assessment.companyId before creating an
+// AssessmentProblem row; this is not enforced by the schema.
+model Problem {
+  id String @id @default(cuid())
+
+  title       String
+  slug        String
+  description String
+
+  type       ProblemType
+  difficulty Difficulty  @default(MEDIUM)
+
+  defaultMarks     Int  @default(10)
+  timeLimitSeconds Int?
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  createdById String
+  createdBy   User   @relation("ProblemCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  isPublic Boolean @default(false)
+
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  mcqProblem McqProblem?
+  testCases  TestCase[]
+
+  assessmentProblems AssessmentProblem[]
+  submissions        Submission[]
+
+  @@unique([companyId, slug])
+  @@index([companyId])
+  @@index([companyId, type])
+  @@index([companyId, difficulty])
+  @@index([companyId, isPublic])
+  @@index([createdById])
+  @@index([type])
+  @@index([difficulty])
+  @@index([isPublic])
+  @@index([deletedAt])
+  @@map("problems")
+}
+
+model McqProblem {
+  id String @id @default(cuid())
+
+  problemId String  @unique
+  problem   Problem @relation(fields: [problemId], references: [id], onDelete: Cascade)
+
+  type        McqType
+  explanation String?
+
+  options McqOption[]
+
+  @@map("mcq_problems")
+}
+
+model McqOption {
+  id String @id @default(cuid())
+
+  mcqProblemId String
+  mcqProblem   McqProblem @relation(fields: [mcqProblemId], references: [id], onDelete: Cascade)
+
+  optionText String
+  order      Int
+  isCorrect  Boolean @default(false)
+
+  submissionAnswers SubmissionAnswer[]
+
+  @@unique([mcqProblemId, order])
+  @@index([mcqProblemId])
+  @@index([mcqProblemId, isCorrect])
+  @@map("mcq_options")
+}
+
+model TestCase {
+  id String @id @default(cuid())
+
+  problemId String
+  problem   Problem @relation(fields: [problemId], references: [id], onDelete: Cascade)
+
+  input          String?
+  expectedOutput String
+
+  isSample Boolean @default(false)
+  points   Int     @default(0)
+
+  timeLimitMs   Int?
+  memoryLimitMb Int?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  results TestCaseResult[]
+
+  @@index([problemId])
+  @@index([problemId, isSample])
+  @@map("test_cases")
+}
+
+model AssessmentProblem {
+  id String @id @default(cuid())
+
+  assessmentId String
+  assessment   Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+
+  problemId String
+  problem   Problem @relation(fields: [problemId], references: [id], onDelete: Restrict)
+
+  order Int
+  marks Int
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([assessmentId, problemId])
+  @@unique([assessmentId, order])
+  @@index([problemId])
+  @@map("assessment_problems")
+}
+
+// onDelete on assessment is Restrict (not Cascade), consistent with
+// AssessmentAttempt.assessment — assessments with real attempt/invitation
+// history cannot be hard-deleted. Archive instead of deleting.
+model AssessmentInvitation {
+  id String @id @default(cuid())
+
+  assessmentId String
+  assessment   Assessment @relation(fields: [assessmentId], references: [id], onDelete: Restrict)
+
+  // Nullable because an invitation can be created by email before the
+  // candidate has an account.
+  candidateId String?
+  candidate   User?   @relation("CandidateInvitations", fields: [candidateId], references: [id], onDelete: SetNull)
+
+  email String @db.VarChar(320)
+
+  status InvitationStatus @default(PENDING)
+
+  tokenHash String @unique @db.VarChar(64)
+
+  invitedAt   DateTime  @default(now()) @db.Timestamptz(3)
+  acceptedAt  DateTime? @db.Timestamptz(3)
+  expiresAt   DateTime? @db.Timestamptz(3)
+  completedAt DateTime? @db.Timestamptz(3)
+
+  attempts AssessmentAttempt[]
+
+  @@unique([assessmentId, email])
+  @@index([email])
+  @@index([candidateId])
+  @@index([assessmentId, status])
+  @@index([status, expiresAt])
+  @@map("assessment_invitations")
+}
+
+// invitationId is optional and NOT unique: when maxAttempts > 1 the same
+// invitation legitimately backs multiple attempts. Uniqueness of an
+// individual attempt is enforced via [assessmentId, candidateId, attemptNumber].
+model AssessmentAttempt {
+  id String @id @default(cuid())
+
+  assessmentId String
+  assessment   Assessment @relation(fields: [assessmentId], references: [id], onDelete: Restrict)
+
+  candidateId String
+  candidate   User   @relation("CandidateAttempts", fields: [candidateId], references: [id], onDelete: Cascade)
+
+  invitationId String?
+  invitation   AssessmentInvitation? @relation(fields: [invitationId], references: [id], onDelete: SetNull)
+
+  attemptNumber Int @default(1)
+
+  status AttemptStatus @default(NOT_STARTED)
+
+  startedAt       DateTime? @db.Timestamptz(3)
+  submittedAt     DateTime? @db.Timestamptz(3)
+  expiresAt       DateTime  @db.Timestamptz(3)
+  autoSubmittedAt DateTime? @db.Timestamptz(3)
+
+  // Must be incremented in the same transaction as the matching ProctoringEvent insert.
+  tabSwitchCount Int @default(0)
+
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  submissions      Submission[]
+  result           Result?
+  proctoringEvents ProctoringEvent[]
+
+  @@unique([assessmentId, candidateId, attemptNumber])
+  @@index([assessmentId, candidateId])
+  @@index([candidateId, createdAt])
+  @@index([status, expiresAt])
+  @@index([candidateId, status, expiresAt])
+  @@index([assessmentId, status, expiresAt])
+  @@index([invitationId])
+  @@map("assessment_attempts")
+}
+
+// One submission per problem per attempt.
+model Submission {
+  id String @id @default(cuid())
+
+  attemptId String
+  attempt   AssessmentAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  problemId String
+  problem   Problem @relation(fields: [problemId], references: [id], onDelete: Restrict)
+
+  answerText String?
+
+  code     String?
+  language String?
+
+  status SubmissionStatus @default(DRAFT)
+
+  submittedAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  answers SubmissionAnswer[]
+
+  evaluation SubmissionEvaluation?
+
+  testCaseResults TestCaseResult[]
+
+  @@unique([attemptId, problemId])
+  @@index([attemptId, status, createdAt])
+  @@index([problemId])
+  @@index([submittedAt])
+  @@map("submissions")
+}
+
+model SubmissionAnswer {
+  id String @id @default(cuid())
+
+  submissionId String
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  optionId String
+  option   McqOption @relation(fields: [optionId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([submissionId, optionId])
+  @@index([submissionId])
+  @@index([optionId])
+  @@map("submission_answers")
+}
+
+// Single source of truth for a submission's score.
+model SubmissionEvaluation {
+  id String @id @default(cuid())
+
+  submissionId String     @unique
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  evaluatorId String?
+  evaluator   User?   @relation("SubmissionEvaluator", fields: [evaluatorId], references: [id], onDelete: SetNull)
+
+  score    Int @default(0)
+  maxScore Int
+
+  feedback String?
+
+  status          EvaluationStatus @default(PENDING)
+  isAutoEvaluated Boolean          @default(false)
+
+  evaluatedAt DateTime? @db.Timestamptz(3)
+
+  metadata Json?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([evaluatorId])
+  @@index([status, evaluatedAt])
+  @@index([isAutoEvaluated])
+  @@map("submission_evaluations")
+}
+
+model TestCaseResult {
+  id String @id @default(cuid())
+
+  submissionId String
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  testCaseId String
+  testCase   TestCase @relation(fields: [testCaseId], references: [id], onDelete: Restrict)
+
+  passed Boolean @default(false)
+
+  actualOutput   String?
+  expectedOutput String?
+
+  executionTimeMs Int?
+  memoryUsedMb    Int?
+
+  points Int @default(0)
+
+  errorMessage String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([submissionId, testCaseId])
+  @@index([submissionId])
+  @@index([testCaseId])
+  @@index([submissionId, passed])
+  @@map("test_case_results")
+}
+
+// Attempt-level source of truth.
+model Result {
+  id String @id @default(cuid())
+
+  attemptId String            @unique
+  attempt   AssessmentAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  assessmentId String
+  assessment   Assessment @relation(fields: [assessmentId], references: [id], onDelete: Restrict)
+
+  totalScore Int   @default(0)
+  totalMarks Int
+  percentage Float @default(0)
+
+  status ResultStatus @default(PENDING)
+
+  rank Int?
+
+  evaluatedAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([assessmentId, totalScore])
+  @@index([assessmentId, rank])
+  @@index([assessmentId, status])
+  @@index([status])
+  @@index([percentage])
+  @@map("results")
+}
+
+model ProctoringEvent {
+  id String @id @default(cuid())
+
+  attemptId String
+  attempt   AssessmentAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  eventType ProctoringEventType
+
+  timestamp DateTime @default(now()) @db.Timestamptz(3)
+
+  metadata Json?
+
+  @@index([attemptId, timestamp])
+  @@index([attemptId, eventType, timestamp])
+  @@index([eventType])
+  @@map("proctoring_events")
+}
+
+model Subscription {
+  id String @id @default(cuid())
+
+  companyId String  @unique
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  plan   SubscriptionPlan   @default(FREE)
+  status SubscriptionStatus @default(ACTIVE)
+
+  stripeCustomerId     String? @unique
+  stripeSubscriptionId String? @unique
+
+  currentPeriodStart DateTime? @db.Timestamptz(3)
+  currentPeriodEnd   DateTime? @db.Timestamptz(3)
+
+  cancelAtPeriodEnd Boolean   @default(false)
+  cancelledAt       DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  payments Payment[]
+
+  @@index([plan])
+  @@index([status])
+  @@index([currentPeriodEnd])
+  @@map("subscriptions")
+}
+
+model Payment {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  subscriptionId String?
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  provider PaymentProvider
+  status   PaymentStatus   @default(PENDING)
+
+  amountMinor BigInt
+  currency    String @default("USD") @db.VarChar(3)
+
+  transactionId     String? @unique
+  providerPaymentId String? @unique
+  idempotencyKey    String? @unique
+
+  metadata Json?
+
+  paidAt   DateTime? @db.Timestamptz(3)
+  failedAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([userId, createdAt])
+  @@index([companyId, createdAt])
+  @@index([subscriptionId])
+  @@index([status, createdAt])
+  @@index([provider])
+  @@map("payments")
+}
+
+model PaymentWebhookEvent {
+  id String @id @default(cuid())
+
+  provider PaymentProvider
+
+  eventId   String
+  eventType String
+
+  payload Json
+
+  processed   Boolean   @default(false)
+  processedAt DateTime? @db.Timestamptz(3)
+
+  retryCount Int @default(0)
+  maxRetries Int @default(3)
+
+  lastRetryAt DateTime? @db.Timestamptz(3)
+  nextRetryAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([provider, eventId])
+  @@index([provider])
+  @@index([processed])
+  @@index([processed, nextRetryAt])
+  @@index([createdAt])
+  @@map("payment_webhook_events")
+}
+
+model Notification {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title   String
+  message String
+
+  type NotificationType
+
+  isRead Boolean @default(false)
+
+  metadata Json?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([userId, type, createdAt])
+  @@index([userId, isRead, createdAt])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id String @id @default(cuid())
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  action AuditAction
+
+  entity   String
+  entityId String?
+
+  oldValue Json?
+  newValue Json?
+  metadata Json?
+
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([userId])
+  @@index([action])
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model UserConsent {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  consentType ConsentType
+  granted     Boolean     @default(true)
+
+  grantedAt DateTime  @default(now()) @db.Timestamptz(3)
+  revokedAt DateTime? @db.Timestamptz(3)
+
+  @@unique([userId, consentType])
+  @@index([userId])
+  @@map("user_consents")
+}
