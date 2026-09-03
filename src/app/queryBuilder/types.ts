@@ -8,18 +8,19 @@ export type EnumFilterConfig = { type: "enum"; enum: Record<string, string> };
 export type FilterConfig = "string" | "number" | "decimal" | "boolean" | "date" | EnumFilterConfig;
 
 export type QueryConfig = {
-	searchableFields?: string[];
-	filterableFields: Record<string, FilterConfig>;
-	sortableFields: string[];
-	includableRelations?: string[];
-	defaultInclude?: Record<string, boolean>;
-	softDelete?: boolean;
-	maxLimit?: number;
-	selectableFields?: string[];
-	defaultSortField?: string;
-	maxInclude?: number;
-	maxNestedDepth?: number;
-	maxSearchLength?: number;
+    searchableFields?: string[];
+    filterableFields: Record<string, FilterConfig>;
+    sortableFields: string[];
+    includableRelations?: string[];
+    defaultInclude?: Record<string, boolean>;
+    defaultSelect?: Record<string, unknown>;
+    softDelete?: boolean;
+    maxLimit?: number;
+    selectableFields?: string[];
+    defaultSortField?: string;
+    maxInclude?: number;
+    maxNestedDepth?: number;
+    maxSearchLength?: number;
 };
 
 export type ParsedFilter = { field: string; operator: FilterOperator; value: unknown };
