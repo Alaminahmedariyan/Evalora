@@ -50,14 +50,13 @@ const registerCompany = async (userId: string, payload: RegisterCompanyInput) =>
 		let record;
 
 		if (existing) {
-			// Reactivating a previously soft-deleted company.
 			record = await tx.company.update({
 				where: { id: existing.id },
 				data: {
 					name: payload.name,
-					description: payload.description,
-					website: payload.website,
-					industry: payload.industry,
+					...(payload.description !== undefined && { description: payload.description }),
+					...(payload.website !== undefined && { website: payload.website }),
+					...(payload.industry !== undefined && { industry: payload.industry }),
 					isVerified: false,
 					deletedAt: null,
 				},
@@ -72,9 +71,9 @@ const registerCompany = async (userId: string, payload: RegisterCompanyInput) =>
 				data: {
 					name: payload.name,
 					slug,
-					description: payload.description,
-					website: payload.website,
-					industry: payload.industry,
+					...(payload.description !== undefined && { description: payload.description }),
+					...(payload.website !== undefined && { website: payload.website }),
+					...(payload.industry !== undefined && { industry: payload.industry }),
 					ownerId: userId,
 				},
 				select: COMPANY_DETAIL_SELECT,
@@ -151,7 +150,11 @@ const updateMyCompany = async (
 		throw new AppError(StatusCodes.NOT_FOUND, "You don't have a registered company yet.");
 	}
 
-	const updateData: Prisma.CompanyUpdateInput = { ...payload };
+	const updateData: Prisma.CompanyUpdateInput = {
+		...(payload.description !== undefined && { description: payload.description }),
+		...(payload.website !== undefined && { website: payload.website }),
+		...(payload.industry !== undefined && { industry: payload.industry }),
+	};
 
 	if (file) {
 		const uploaded = await uploadFileToCloudinary(file.buffer, file.originalname, "company-logos");
