@@ -55,6 +55,25 @@ const userQueryBuilder = new QueryBuilder<
 });
 
 /**
+ * Blocks an actor from performing a destructive/self-privilege-changing
+ * action on their own account (role change, status change, delete).
+ * Without this, an Admin could accidentally demote, suspend, or delete
+ * themselves with no other Admin left to undo it.
+ */
+const assertNotActingOnSelf = (
+    actorId: string,
+    targetId: string,
+    action: string,
+) => {
+    if (actorId === targetId) {
+        throw new AppError(
+            StatusCodes.FORBIDDEN,
+            `You cannot ${action} your own account.`,
+        );
+    }
+};
+
+/**
  * Get all users
  */
 const getAllUsers = async (query: Record<string, unknown>) => {
@@ -139,8 +158,11 @@ const updateProfile = async (
 const updateRole = async (
     id: string,
     role: UserRole,
+    actorId: string,
     actorRole: UserRole,
 ) => {
+    assertNotActingOnSelf(actorId, id, "change the role of");
+
     const existing = await prisma.user.findFirst({
         where: {
             id,
@@ -156,8 +178,10 @@ const updateRole = async (
     }
 
     /**
-     * Only ADMIN can assign ADMIN role
-     * and modify an existing ADMIN.
+     * Only ADMIN can assign ADMIN role and modify an existing ADMIN.
+     * The route is already gated with requireRole("ADMIN"), so actorRole
+     * is always "ADMIN" today — this check stays as defense-in-depth in
+     * case updateRole is ever called from a route without that middleware.
      */
     if (
         (role === "ADMIN" || existing.role === "ADMIN") &&
@@ -193,7 +217,10 @@ const updateRole = async (
 const updateStatus = async (
     id: string,
     status: UserStatus,
+    actorId: string,
 ) => {
+    assertNotActingOnSelf(actorId, id, "change the status of");
+
     const existing = await prisma.user.findFirst({
         where: {
             id,
@@ -229,7 +256,9 @@ const updateStatus = async (
 /**
  * Soft delete user
  */
-const softDeleteUser = async (id: string) => {
+const softDeleteUser = async (id: string, actorId: string) => {
+    assertNotActingOnSelf(actorId, id, "delete");
+
     const existing = await prisma.user.findFirst({
         where: {
             id,

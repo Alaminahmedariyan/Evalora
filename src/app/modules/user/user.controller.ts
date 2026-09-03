@@ -63,6 +63,7 @@ const updateRole = catchAsync(async (req: Request, res: Response) => {
 	const user = await userService.updateRole(
 		req.params.id as string,
 		req.body.role,
+		currentUser.id,
 		currentUser.role,
 	);
 
@@ -74,20 +75,25 @@ const updateRole = catchAsync(async (req: Request, res: Response) => {
 });
 
 const updateStatus = catchAsync(async (req: Request, res: Response) => {
-    const user = await userService.updateStatus(
-        req.params.id as string,
-        req.body.status,
-    );
+	const currentUser = req.user as AuthenticatedUser;
 
-    res.status(StatusCodes.OK).json({
-        success: true,
-        message: "User status updated successfully.",
-        data: user,
-    });
+	const user = await userService.updateStatus(
+		req.params.id as string,
+		req.body.status,
+		currentUser.id,
+	);
+
+	res.status(StatusCodes.OK).json({
+		success: true,
+		message: "User status updated successfully.",
+		data: user,
+	});
 });
 
 const deleteUser = catchAsync(async (req: Request, res: Response) => {
-	await userService.softDeleteUser(req.params.id as string);
+	const currentUser = req.user as AuthenticatedUser;
+
+	await userService.softDeleteUser(req.params.id as string, currentUser.id);
 
 	res.status(StatusCodes.OK).json({
 		success: true,

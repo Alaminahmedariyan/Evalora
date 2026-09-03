@@ -9,6 +9,7 @@ const router = Router();
 const moduleRoutes = [
 	{ path: "/auth", route: authRoutes },
 	{ path: "/users", route: userRoutes },
+	{ path: "/companies", route: companyRoutes },
 ];
 
 for (const { path, route } of moduleRoutes) {
