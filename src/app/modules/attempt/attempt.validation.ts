@@ -62,5 +62,5 @@ export const attemptValidation = {
 	startAttemptSchema,
 	saveSubmissionSchema,
 	manualEvaluationSchema,
-	proctoringEventSchema,
+	proctoringEventSchema, 
 };

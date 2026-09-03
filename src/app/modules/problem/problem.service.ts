@@ -54,7 +54,7 @@ const createProblem = async (companyId: string, createdById: string, payload: Cr
 				mcqProblem: {
 					create: {
 						type: payload.mcqType ?? "SINGLE_CHOICE",
-						explanation: payload.explanation,
+						...(payload.explanation !== undefined && { explanation: payload.explanation }),
 						options: {
 							create: payload.options.map((option) => ({
 								optionText: option.optionText,
@@ -74,14 +74,13 @@ const createProblem = async (companyId: string, createdById: string, payload: Cr
 			data: {
 				...baseData,
 				type: "CODING",
-				timeLimitSeconds: payload.timeLimitSeconds,
+				...(payload.timeLimitSeconds !== undefined && { timeLimitSeconds: payload.timeLimitSeconds }),
 				testCases: { create: payload.testCases },
 			},
 			select: PROBLEM_DETAIL_SELECT,
 		});
 	}
 
-	// WRITTEN
 	return prisma.problem.create({
 		data: { ...baseData, type: "WRITTEN" },
 		select: PROBLEM_DETAIL_SELECT,

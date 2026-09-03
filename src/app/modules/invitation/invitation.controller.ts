@@ -69,7 +69,7 @@ const getInvitationById = catchAsync(async (req: Request, res: Response) => {
 		id: currentUser.id,
 		email: currentUser.email,
 		role: currentUser.role,
-		companyId,
+		...(companyId !== undefined && { companyId }),
 	});
 
 	res.status(StatusCodes.OK).json({

@@ -1,3 +1,4 @@
+/** biome-ignore-all lint/suspicious/noImplicitAnyLet: <explanation> */
 import { StatusCodes } from "http-status-codes";
 
 import type { Prisma } from "../../../generated/prisma/client";

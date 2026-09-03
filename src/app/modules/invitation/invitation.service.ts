@@ -2,13 +2,13 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { StatusCodes } from "http-status-codes";
 
-import type { Prisma } from "../../../generated/prisma/client";
-import type { UserRole } from "../../../generated/prisma/enums";
+import type { AssessmentStatus, InvitationStatus, UserRole } from "../../../generated/prisma/enums";
 import type { AssessmentInvitationWhereInput } from "../../../generated/prisma/models/AssessmentInvitation";
 
 import { prisma } from "../../../lib/prisma";
 import AppError from "../../errors/appError";
 import { QueryBuilder } from "../../queryBuilder";
+import type { PrismaDelegate } from "../../queryBuilder/types";
 import { sendEmail } from "../../utils/sendEmail";
 
 import { INVITATION_SELECT } from "./invitation.const";
@@ -25,10 +25,39 @@ const invitationEmailTemplate = (assessmentTitle: string, expiresAt: Date) => `
 	</div>
 `;
 
-const invitationQueryBuilder = new QueryBuilder<
-	Prisma.AssessmentInvitationGetPayload<{ select: typeof INVITATION_SELECT }>,
-	AssessmentInvitationWhereInput
->(prisma.assessmentInvitation, {
+/**
+ * Prisma 7's `prisma-client` generator doesn't expose an `XGetPayload`
+ * helper, so the result shape is derived manually from INVITATION_SELECT.
+ * The delegate is also cast to PrismaDelegate<T> because Prisma 7's
+ * generated delegate types don't structurally satisfy QueryBuilder's
+ * simplified PrismaDelegate interface once the select shape includes a
+ * nested relation.
+ */
+type InvitationResult = {
+	id: string;
+	assessmentId: string;
+	candidateId: string | null;
+	email: string;
+	status: InvitationStatus;
+	invitedAt: Date;
+	acceptedAt: Date | null;
+	expiresAt: Date | null;
+	completedAt: Date | null;
+	assessment: {
+		id: string;
+		title: string;
+		slug: string;
+		status: AssessmentStatus;
+		durationMinutes: number;
+		totalMarks: number;
+		passingMarks: number;
+		companyId: string;
+	};
+};
+
+const invitationQueryBuilder = new QueryBuilder<InvitationResult, AssessmentInvitationWhereInput>(
+	prisma.assessmentInvitation as unknown as PrismaDelegate<InvitationResult, AssessmentInvitationWhereInput>,
+	{
 	searchableFields: ["email"],
 	filterableFields: {
 		status: {
@@ -39,9 +68,7 @@ const invitationQueryBuilder = new QueryBuilder<
 	},
 	sortableFields: ["invitedAt", "expiresAt"],
 	selectableFields: Object.keys(INVITATION_SELECT),
-	// AssessmentInvitation has no `deletedAt` column — cancelling a still-
-	// PENDING invitation hard-deletes the row instead (see cancelInvitation
-	// below), so there's nothing for a soft-delete filter to exclude here.
+	defaultSelect: INVITATION_SELECT,
 	defaultSortField: "invitedAt",
 });
 
@@ -121,9 +148,13 @@ const inviteCandidates = async (assessmentId: string, companyId: string, payload
 
 const getInvitationsForAssessment = async (
 	assessmentId: string,
-	companyId: string,
+	companyId: string | undefined,
 	query: Record<string, unknown>,
 ) => {
+	if (!companyId) {
+		throw new AppError(StatusCodes.FORBIDDEN, "Recruiter scope could not be resolved.");
+	}
+
 	const assessment = await prisma.assessment.findFirst({
 		where: { id: assessmentId, companyId, deletedAt: null },
 	});

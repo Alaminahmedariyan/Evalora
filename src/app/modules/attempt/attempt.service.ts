@@ -1,5 +1,6 @@
 import { StatusCodes } from "http-status-codes";
 
+import type { Prisma } from "../../../generated/prisma/client";
 import type { UserRole } from "../../../generated/prisma/enums";
 
 import { prisma } from "../../../lib/prisma";
@@ -250,18 +251,18 @@ const saveSubmission = async (
 		update: {
 			status: "SUBMITTED",
 			submittedAt: new Date(),
-			code: problem.type === "CODING" ? payload.code : undefined,
-			language: problem.type === "CODING" ? payload.language : undefined,
-			answerText: problem.type === "WRITTEN" ? payload.answerText : undefined,
+			...(problem.type === "CODING" && payload.code !== undefined && { code: payload.code }),
+			...(problem.type === "CODING" && payload.language !== undefined && { language: payload.language }),
+			...(problem.type === "WRITTEN" && payload.answerText !== undefined && { answerText: payload.answerText }),
 		},
 		create: {
 			attemptId,
 			problemId,
 			status: "SUBMITTED",
 			submittedAt: new Date(),
-			code: problem.type === "CODING" ? payload.code : undefined,
-			language: problem.type === "CODING" ? payload.language : undefined,
-			answerText: problem.type === "WRITTEN" ? payload.answerText : undefined,
+			...(problem.type === "CODING" && payload.code !== undefined && { code: payload.code }),
+			...(problem.type === "CODING" && payload.language !== undefined && { language: payload.language }),
+			...(problem.type === "WRITTEN" && payload.answerText !== undefined && { answerText: payload.answerText }),
 		},
 	});
 
@@ -315,7 +316,7 @@ const recordProctoringEvent = async (attemptId: string, candidateId: string, pay
 	if (payload.eventType === "TAB_SWITCH") {
 		await prisma.$transaction([
 			prisma.proctoringEvent.create({
-				data: { attemptId, eventType: payload.eventType, metadata: payload.metadata },
+				data: { attemptId, eventType: payload.eventType, ...(payload.metadata && { metadata: payload.metadata as Prisma.InputJsonValue }) },
 			}),
 			prisma.assessmentAttempt.update({
 				where: { id: attemptId },
@@ -324,7 +325,7 @@ const recordProctoringEvent = async (attemptId: string, candidateId: string, pay
 		]);
 	} else {
 		await prisma.proctoringEvent.create({
-			data: { attemptId, eventType: payload.eventType, metadata: payload.metadata },
+			data: { attemptId, eventType: payload.eventType, ...(payload.metadata && { metadata: payload.metadata as Prisma.InputJsonValue }) },
 		});
 	}
 
