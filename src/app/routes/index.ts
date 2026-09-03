@@ -2,6 +2,8 @@ import { Router } from "express";
 import { authRoutes } from "../modules/auth/auth.routes";
 import { userRoutes } from "../modules/user/user.routes";
 import { companyRoutes } from "../modules/company/company.routes";
+import { candidateRoutes } from "../modules/candidade/candidate.routes";
+import { problemRoutes } from "../modules/problem/problem.routes";
 
 
 
