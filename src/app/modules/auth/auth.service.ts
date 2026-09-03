@@ -2,7 +2,6 @@ import { StatusCodes } from "http-status-codes";
 
 import AppError from "../../errors/appError";
 import { auth } from "../../../lib/auth";
-import { verifyCaptcha } from "../../utils/verifyCaptcha";
 import type {
 	ChangePasswordInput,
 	LoginInput,
@@ -33,24 +32,26 @@ const callAuthEndpoint = async (
 	};
 };
 
-const register = async (payload: RegisterInput, headers: Headers) => {
-	if (payload.captchaToken) {
-		await verifyCaptcha(payload.captchaToken);
-	}
-
-	return callAuthEndpoint(
+// Captcha verification is intentionally NOT done here. It lives entirely in
+// `auth.ts`'s `hooks.before` (path === "/sign-up/email"), which reads
+// `ctx.body.captchaToken`. `captchaToken` is forwarded into the body below
+// so that hook can see it — verifying it a second time here would be
+// redundant, and since hCaptcha tokens are single-use, a second verify call
+// on the same token would fail even for a genuinely valid captcha.
+const register = (payload: RegisterInput, headers: Headers) =>
+	callAuthEndpoint(
 		auth.api.signUpEmail({
 			body: {
 				name: payload.name,
 				email: payload.email,
 				password: payload.password,
+				captchaToken: payload.captchaToken,
 			},
 			headers,
 			asResponse: true,
 		}),
 		AUTH_FALLBACK_MESSAGES.REGISTER,
 	);
-};
 
 const login = (payload: LoginInput, headers: Headers) =>
 	callAuthEndpoint(
@@ -73,6 +74,20 @@ const logout = (headers: Headers) =>
 			asResponse: true,
 		}),
 		AUTH_FALLBACK_MESSAGES.LOGOUT,
+	);
+
+// Better Auth uses sliding-expiry sessions (see `session.updateAge` in
+// auth.ts) rather than a classic access/refresh token pair — reading the
+// current session via getSession() is itself what extends it. This endpoint
+// exists mainly to give the assignment's required `/auth/refresh-token`
+// route a real, working implementation.
+const refreshToken = (headers: Headers) =>
+	callAuthEndpoint(
+		auth.api.getSession({
+			headers,
+			asResponse: true,
+		}),
+		AUTH_FALLBACK_MESSAGES.REFRESH_TOKEN,
 	);
 
 const sendEmailOtp = (payload: SendEmailOtpInput) =>
@@ -112,10 +127,7 @@ const resetPasswordWithOtp = (payload: ResetPasswordOtpInput) =>
 		AUTH_FALLBACK_MESSAGES.RESET_PASSWORD_OTP,
 	);
 
-const changePassword = (
-	payload: ChangePasswordInput,
-	headers: Headers,
-) =>
+const changePassword = (payload: ChangePasswordInput, headers: Headers) =>
 	callAuthEndpoint(
 		auth.api.changePassword({
 			body: {
@@ -133,6 +145,7 @@ export const authService = {
 	register,
 	login,
 	logout,
+	refreshToken,
 	sendEmailOtp,
 	verifyEmailOtp,
 	resetPasswordWithOtp,

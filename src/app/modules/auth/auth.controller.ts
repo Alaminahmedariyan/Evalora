@@ -53,6 +53,20 @@ const logout = catchAsync(async (req: Request, res: Response) => {
 	});
 });
 
+const refreshToken = catchAsync(async (req: Request, res: Response) => {
+	const { data, headers } = await authService.refreshToken(
+		fromNodeHeaders(req.headers),
+	);
+
+	applyAuthCookies(headers, res);
+
+	res.status(StatusCodes.OK).json({
+		success: true,
+		message: "Session refreshed successfully.",
+		data,
+	});
+});
+
 const sendEmailOtp = catchAsync(async (req: Request, res: Response) => {
 	const { data } = await authService.sendEmailOtp(req.body);
 
@@ -112,6 +126,7 @@ export const authController = {
 	register,
 	login,
 	logout,
+	refreshToken,
 	sendEmailOtp,
 	verifyEmailOtp,
 	resetPasswordWithOtp,
