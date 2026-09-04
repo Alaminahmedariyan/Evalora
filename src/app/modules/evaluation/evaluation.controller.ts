@@ -21,7 +21,7 @@ const getSubmissionsForAttempt = catchAsync(async (req: Request, res: Response) 
 	const submissions = await evaluationService.getSubmissionsForAttempt(req.params.attemptId as string, {
 		id: currentUser.id,
 		role: currentUser.role,
-		companyId,
+		...(companyId !== undefined && { companyId }),
 	});
 
 	res.status(StatusCodes.OK).json({
@@ -38,7 +38,7 @@ const getSubmissionById = catchAsync(async (req: Request, res: Response) => {
 	const submission = await evaluationService.getSubmissionById(req.params.id as string, {
 		id: currentUser.id,
 		role: currentUser.role,
-		companyId,
+		...(companyId !== undefined && { companyId }),
 	});
 
 	res.status(StatusCodes.OK).json({

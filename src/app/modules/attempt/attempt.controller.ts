@@ -46,7 +46,7 @@ const getAttemptById = catchAsync(async (req: Request, res: Response) => {
 	const attempt = await attemptService.getAttemptById(req.params.id as string, {
 		id: currentUser.id,
 		role: currentUser.role,
-		companyId,
+		...(companyId !== undefined && { companyId }),
 	});
 
 	res.status(StatusCodes.OK).json({
