@@ -35,18 +35,21 @@ const callAuthEndpoint = async (
 // Captcha verification is intentionally NOT done here. It lives entirely in
 // `auth.ts`'s `hooks.before` (path === "/sign-up/email"), which reads
 // `ctx.body.captchaToken`. `captchaToken` is forwarded into the body below
-// so that hook can see it — verifying it a second time here would be
-// redundant, and since hCaptcha tokens are single-use, a second verify call
-// on the same token would fail even for a genuinely valid captcha.
+// (cast to bypass the SDK's strict body type, since the hook reads it from
+// the raw context) so that hook can see it — verifying it a second time
+// here would be redundant, and since hCaptcha tokens are single-use, a
+// second verify call on the same token would fail even for a genuinely
+// valid captcha.
 const register = (payload: RegisterInput, headers: Headers) =>
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	callAuthEndpoint(
 		auth.api.signUpEmail({
 			body: {
 				name: payload.name,
 				email: payload.email,
 				password: payload.password,
-				captchaToken: payload.captchaToken,
-			},
+				...(payload.captchaToken && { captchaToken: payload.captchaToken }),
+			} as any,
 			headers,
 			asResponse: true,
 		}),

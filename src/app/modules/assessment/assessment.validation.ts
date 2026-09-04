@@ -26,7 +26,10 @@ const baseAssessmentFields = {
 };
 
 const validateProblemsInvariants = (
-	data: { problems?: { problemId: string; order: number; marks: number }[]; totalMarks?: number },
+	data: {
+		problems?: { problemId: string; order: number; marks: number }[] | undefined;
+		totalMarks?: number | undefined;
+	},
 	ctx: z.RefinementCtx,
 ) => {
 	if (!data.problems) return;
