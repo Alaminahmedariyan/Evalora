@@ -1,8 +1,8 @@
 {
-  "name": "Templates",
+  "name": "evalora-backend",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Evalora - AI Powered Application Backend",
+  "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsup",

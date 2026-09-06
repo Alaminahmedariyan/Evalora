@@ -132,13 +132,15 @@ const handleStripeWebhook = async (rawBody: Buffer, signature: string | undefine
 
 		if (paymentId) {
 			await prisma.$transaction(async (tx) => {
+				const paymentIntent = session.payment_intent;
+				const transactionId = typeof paymentIntent === "string" ? paymentIntent : paymentIntent?.id;
+
 				const payment = await tx.payment.update({
 					where: { id: paymentId },
 					data: {
 						status: "PAID",
 						paidAt: new Date(),
-						transactionId:
-							typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id,
+						...(transactionId && { transactionId }),
 					},
 				});
 
@@ -158,7 +160,7 @@ const handleStripeWebhook = async (rawBody: Buffer, signature: string | undefine
 					data: {
 						userId: payment.userId,
 						title: "Payment Successful",
-						message: `Your payment of ${(payment.amountMinor / 100).toFixed(2)} ${payment.currency} was successful.`,
+						message: `Your payment of ${(Number(payment.amountMinor) / 100).toFixed(2)} ${payment.currency} was successful.`,
 						type: "PAYMENT_SUCCESS",
 					},
 				});

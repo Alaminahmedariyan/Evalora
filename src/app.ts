@@ -62,7 +62,7 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(cookieParser());
 
 app.get("/", (_req: Request, res: Response) => {
-	res.status(200).json({ success: true, message: "API is running." });
+	res.status(200).json({ success: true, message: "Evalora API is running." });
 });
 
 app.get("/health", async (_req: Request, res: Response) => {
