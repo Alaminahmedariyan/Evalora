@@ -2,7 +2,6 @@ export type RegisterInput = {
 	name: string;
 	email: string;
 	password: string;
-	captchaToken?: string;
 };
 
 export type LoginInput = {

@@ -95,11 +95,6 @@ const envSchema = z.object({
 	SUPER_ADMIN_NAME: z.string().optional(),
 	SUPER_ADMIN_EMAIL: z.string().email(),
 	SUPER_ADMIN_PASSWORD: z.string().min(8),
-
-	// ============================================================
-	// hCaptcha
-	// ============================================================
-	HCAPTCHA_SECRET_KEY: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -214,13 +209,6 @@ const config = {
 		email: env.SUPER_ADMIN_EMAIL,
 		password: env.SUPER_ADMIN_PASSWORD,
 		name: env.SUPER_ADMIN_NAME ?? "Super Admin",
-	},
-
-	// ============================================================
-	// hCaptcha
-	// ============================================================
-	captcha: {
-		hcaptchaSecretKey: env.HCAPTCHA_SECRET_KEY,
 	},
 } as const;
 

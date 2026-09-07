@@ -14,7 +14,6 @@ import {
 	welcomeEmailTemplate,
 } from "../app/utils/emailTemplates";
 import { sendEmailSmtp } from "../app/utils/sendEmailSmtp";
-import { verifyCaptcha } from "../app/utils/verifyCaptcha";
 import { prisma } from "./prisma";
 
 const socialProviders: Record<
@@ -136,7 +135,7 @@ export const auth = betterAuth({
 	],
 
 	// --------------------------------------------------------------
-	// Request lifecycle hooks — brute-force lockout + optional captcha
+	// Request lifecycle hooks — brute-force lockout
 	// --------------------------------------------------------------
 	hooks: {
 		before: createAuthMiddleware(async (ctx) => {
@@ -147,13 +146,6 @@ export const auth = betterAuth({
 						message:
 							"Too many failed login attempts. Please try again in 15 minutes.",
 					});
-				}
-			}
-
-			if (ctx.path === "/sign-up/email") {
-				const captchaToken = ctx.body?.captchaToken as string | undefined;
-				if (config.captcha.hcaptchaSecretKey && captchaToken) {
-					await verifyCaptcha(captchaToken);
 				}
 			}
 		}),
