@@ -8,50 +8,49 @@ import { prisma } from "../../../lib/prisma";
 import AppError from "../../errors/appError";
 import { QueryBuilder } from "../../queryBuilder";
 import { uploadFileToCloudinary } from "../../utils/fileUploader";
-
-import type { UpdateProfileInput } from "./user.interface";
 import { USER_PUBLIC_SELECT } from "./user.const";
+import type { UpdateProfileInput } from "./user.interface";
 
 /**
  * User Query Builder
  */
 const userQueryBuilder = new QueryBuilder<
-    Prisma.UserGetPayload<{
-        select: typeof USER_PUBLIC_SELECT;
-    }>,
-    UserWhereInput
+	Prisma.UserGetPayload<{
+		select: typeof USER_PUBLIC_SELECT;
+	}>,
+	UserWhereInput
 >(prisma.user, {
-    searchableFields: ["name", "email", "phone"],
+	searchableFields: ["name", "email", "phone"],
 
-    filterableFields: {
-        role: {
-            type: "enum",
-            enum: {
-                ADMIN: "ADMIN",
-                RECRUITER: "RECRUITER",
-                CANDIDATE: "CANDIDATE",
-            },
-        },
+	filterableFields: {
+		role: {
+			type: "enum",
+			enum: {
+				ADMIN: "ADMIN",
+				RECRUITER: "RECRUITER",
+				CANDIDATE: "CANDIDATE",
+			},
+		},
 
-        status: {
-            type: "enum",
-            enum: {
-                ACTIVE: "ACTIVE",
-                SUSPENDED: "SUSPENDED",
-                PENDING: "PENDING",
-            },
-        },
+		status: {
+			type: "enum",
+			enum: {
+				ACTIVE: "ACTIVE",
+				SUSPENDED: "SUSPENDED",
+				PENDING: "PENDING",
+			},
+		},
 
-        createdAt: "date",
-    },
+		createdAt: "date",
+	},
 
-    sortableFields: ["createdAt", "name", "email"],
+	sortableFields: ["createdAt", "name", "email"],
 
-    selectableFields: Object.keys(USER_PUBLIC_SELECT),
+	selectableFields: Object.keys(USER_PUBLIC_SELECT),
 
-    softDelete: true,
+	softDelete: true,
 
-    defaultSortField: "createdAt",
+	defaultSortField: "createdAt",
 });
 
 /**
@@ -61,238 +60,223 @@ const userQueryBuilder = new QueryBuilder<
  * themselves with no other Admin left to undo it.
  */
 const assertNotActingOnSelf = (
-    actorId: string,
-    targetId: string,
-    action: string,
+	actorId: string,
+	targetId: string,
+	action: string,
 ) => {
-    if (actorId === targetId) {
-        throw new AppError(
-            StatusCodes.FORBIDDEN,
-            `You cannot ${action} your own account.`,
-        );
-    }
+	if (actorId === targetId) {
+		throw new AppError(
+			StatusCodes.FORBIDDEN,
+			`You cannot ${action} your own account.`,
+		);
+	}
 };
 
 /**
  * Get all users
  */
 const getAllUsers = async (query: Record<string, unknown>) => {
-    return userQueryBuilder.execute(query);
+	return userQueryBuilder.execute(query);
 };
 
 /**
  * Get single user by ID
  */
 const getUserById = async (id: string) => {
-    const user = await prisma.user.findFirst({
-        where: {
-            id,
-            deletedAt: null,
-        },
-        select: USER_PUBLIC_SELECT,
-    });
+	const user = await prisma.user.findFirst({
+		where: {
+			id,
+			deletedAt: null,
+		},
+		select: USER_PUBLIC_SELECT,
+	});
 
-    if (!user) {
-        throw new AppError(
-            StatusCodes.NOT_FOUND,
-            "User not found.",
-        );
-    }
+	if (!user) {
+		throw new AppError(StatusCodes.NOT_FOUND, "User not found.");
+	}
 
-    return user;
+	return user;
 };
 
 /**
  * Update user profile
  */
 const updateProfile = async (
-    id: string,
-    payload: UpdateProfileInput,
-    file?: Express.Multer.File,
+	id: string,
+	payload: UpdateProfileInput,
+	file?: Express.Multer.File,
 ) => {
-    const existing = await prisma.user.findFirst({
-        where: {
-            id,
-            deletedAt: null,
-        },
-    });
+	const existing = await prisma.user.findFirst({
+		where: {
+			id,
+			deletedAt: null,
+		},
+	});
 
-    if (!existing) {
-        throw new AppError(
-            StatusCodes.NOT_FOUND,
-            "User not found.",
-        );
-    }
+	if (!existing) {
+		throw new AppError(StatusCodes.NOT_FOUND, "User not found.");
+	}
 
-    const updateData: Prisma.UserUpdateInput = {
-        ...payload,
-    };
+	const updateData: Prisma.UserUpdateInput = {
+		...payload,
+	};
 
-    /**
-     * Upload new profile image if file exists
-     */
-    if (file) {
-        const uploaded = await uploadFileToCloudinary(
-            file.buffer,
-            file.originalname,
-            "avatars",
-        );
+	/**
+	 * Upload new profile image if file exists
+	 */
+	if (file) {
+		const uploaded = await uploadFileToCloudinary(
+			file.buffer,
+			file.originalname,
+			"avatars",
+		);
 
-        updateData.image = uploaded.secure_url;
-    }
+		updateData.image = uploaded.secure_url;
+	}
 
-    const updatedUser = await prisma.user.update({
-        where: {
-            id,
-        },
-        data: updateData,
-        select: USER_PUBLIC_SELECT,
-    });
+	const updatedUser = await prisma.user.update({
+		where: {
+			id,
+		},
+		data: updateData,
+		select: USER_PUBLIC_SELECT,
+	});
 
-    return updatedUser;
+	return updatedUser;
 };
 
 /**
  * Update user role
  */
 const updateRole = async (
-    id: string,
-    role: UserRole,
-    actorId: string,
-    actorRole: UserRole,
+	id: string,
+	role: UserRole,
+	actorId: string,
+	actorRole: UserRole,
 ) => {
-    assertNotActingOnSelf(actorId, id, "change the role of");
+	assertNotActingOnSelf(actorId, id, "change the role of");
 
-    const existing = await prisma.user.findFirst({
-        where: {
-            id,
-            deletedAt: null,
-        },
-    });
+	const existing = await prisma.user.findFirst({
+		where: {
+			id,
+			deletedAt: null,
+		},
+	});
 
-    if (!existing) {
-        throw new AppError(
-            StatusCodes.NOT_FOUND,
-            "User not found.",
-        );
-    }
+	if (!existing) {
+		throw new AppError(StatusCodes.NOT_FOUND, "User not found.");
+	}
 
-    /**
-     * Only ADMIN can assign ADMIN role and modify an existing ADMIN.
-     * The route is already gated with requireRole("ADMIN"), so actorRole
-     * is always "ADMIN" today — this check stays as defense-in-depth in
-     * case updateRole is ever called from a route without that middleware.
-     */
-    if (
-        (role === "ADMIN" || existing.role === "ADMIN") &&
-        actorRole !== "ADMIN"
-    ) {
-        throw new AppError(
-            StatusCodes.FORBIDDEN,
-            "Only an Admin can assign or modify Admin privileges.",
-        );
-    }
+	/**
+	 * Only ADMIN can assign ADMIN role and modify an existing ADMIN.
+	 * The route is already gated with requireRole("ADMIN"), so actorRole
+	 * is always "ADMIN" today — this check stays as defense-in-depth in
+	 * case updateRole is ever called from a route without that middleware.
+	 */
+	if (
+		(role === "ADMIN" || existing.role === "ADMIN") &&
+		actorRole !== "ADMIN"
+	) {
+		throw new AppError(
+			StatusCodes.FORBIDDEN,
+			"Only an Admin can assign or modify Admin privileges.",
+		);
+	}
 
-    const updatedUser = await prisma.user.update({
-        where: {
-            id,
-        },
-        data: {
-            role,
-        },
-        select: {
-            id: true,
-            name: true,
-            email: true,
-            role: true,
-        },
-    });
+	const updatedUser = await prisma.user.update({
+		where: {
+			id,
+		},
+		data: {
+			role,
+		},
+		select: {
+			id: true,
+			name: true,
+			email: true,
+			role: true,
+		},
+	});
 
-    return updatedUser;
+	return updatedUser;
 };
 
 /**
  * Update user status
  */
 const updateStatus = async (
-    id: string,
-    status: UserStatus,
-    actorId: string,
+	id: string,
+	status: UserStatus,
+	actorId: string,
 ) => {
-    assertNotActingOnSelf(actorId, id, "change the status of");
+	assertNotActingOnSelf(actorId, id, "change the status of");
 
-    const existing = await prisma.user.findFirst({
-        where: {
-            id,
-            deletedAt: null,
-        },
-    });
+	const existing = await prisma.user.findFirst({
+		where: {
+			id,
+			deletedAt: null,
+		},
+	});
 
-    if (!existing) {
-        throw new AppError(
-            StatusCodes.NOT_FOUND,
-            "User not found.",
-        );
-    }
+	if (!existing) {
+		throw new AppError(StatusCodes.NOT_FOUND, "User not found.");
+	}
 
-    const updatedUser = await prisma.user.update({
-        where: {
-            id,
-        },
-        data: {
-            status,
-        },
-        select: {
-            id: true,
-            name: true,
-            email: true,
-            status: true,
-        },
-    });
+	const updatedUser = await prisma.user.update({
+		where: {
+			id,
+		},
+		data: {
+			status,
+		},
+		select: {
+			id: true,
+			name: true,
+			email: true,
+			status: true,
+		},
+	});
 
-    return updatedUser;
+	return updatedUser;
 };
 
 /**
  * Soft delete user
  */
 const softDeleteUser = async (id: string, actorId: string) => {
-    assertNotActingOnSelf(actorId, id, "delete");
+	assertNotActingOnSelf(actorId, id, "delete");
 
-    const existing = await prisma.user.findFirst({
-        where: {
-            id,
-            deletedAt: null,
-        },
-    });
+	const existing = await prisma.user.findFirst({
+		where: {
+			id,
+			deletedAt: null,
+		},
+	});
 
-    if (!existing) {
-        throw new AppError(
-            StatusCodes.NOT_FOUND,
-            "User not found.",
-        );
-    }
+	if (!existing) {
+		throw new AppError(StatusCodes.NOT_FOUND, "User not found.");
+	}
 
-    await prisma.user.update({
-        where: {
-            id,
-        },
-        data: {
-            deletedAt: new Date(),
-            status: "SUSPENDED",
-        },
-    });
+	await prisma.user.update({
+		where: {
+			id,
+		},
+		data: {
+			deletedAt: new Date(),
+			status: "SUSPENDED",
+		},
+	});
 
-    return {
-        message: "User deleted successfully.",
-    };
+	return {
+		message: "User deleted successfully.",
+	};
 };
 
 export const userService = {
-    getAllUsers,
-    getUserById,
-    updateProfile,
-    updateRole,
-    updateStatus,
-    softDeleteUser,
+	getAllUsers,
+	getUserById,
+	updateProfile,
+	updateRole,
+	updateStatus,
+	softDeleteUser,
 };

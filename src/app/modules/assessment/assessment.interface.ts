@@ -27,6 +27,8 @@ export type CreateAssessmentInput = {
  * it's a pure join table with nothing pointing at it via onDelete: Restrict,
  * unlike McqOption/TestCase — see problem.service.ts for that contrast).
  */
-export type UpdateAssessmentInput = Partial<Omit<CreateAssessmentInput, "problems">> & {
+export type UpdateAssessmentInput = Partial<
+	Omit<CreateAssessmentInput, "problems">
+> & {
 	problems?: AssessmentProblemInput[];
 };

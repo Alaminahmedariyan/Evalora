@@ -8,6 +8,10 @@ const router = Router();
 // required for Stripe's signature check. This router is mounted in app.ts
 // before the global express.json() middleware, so no JSON parsing has
 // touched the body by the time it gets here.
-router.post("/stripe", express.raw({ type: "application/json" }), webhookController.handleStripeWebhook);
+router.post(
+	"/stripe",
+	express.raw({ type: "application/json" }),
+	webhookController.handleStripeWebhook,
+);
 
 export const webhookRoutes = router;

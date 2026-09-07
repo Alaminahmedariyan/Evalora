@@ -55,7 +55,12 @@ export const ATTEMPT_DETAIL_SELECT = {
 			allowReview: true,
 			showResultImmediately: true,
 			assessmentProblems: {
-				select: { id: true, order: true, marks: true, problem: { select: ATTEMPT_PROBLEM_SELECT } },
+				select: {
+					id: true,
+					order: true,
+					marks: true,
+					problem: { select: ATTEMPT_PROBLEM_SELECT },
+				},
 				orderBy: { order: "asc" },
 			},
 		},
@@ -95,15 +100,30 @@ export const SUBMISSION_GRADING_SELECT = {
 			type: true,
 			defaultMarks: true,
 			testCases: {
-				select: { id: true, input: true, expectedOutput: true, isSample: true, points: true },
+				select: {
+					id: true,
+					input: true,
+					expectedOutput: true,
+					isSample: true,
+					points: true,
+				},
 			},
 		},
 	},
 	answers: {
-		select: { optionId: true, option: { select: { id: true, optionText: true, isCorrect: true } } },
+		select: {
+			optionId: true,
+			option: { select: { id: true, optionText: true, isCorrect: true } },
+		},
 	},
 	testCaseResults: {
-		select: { id: true, testCaseId: true, passed: true, actualOutput: true, points: true },
+		select: {
+			id: true,
+			testCaseId: true,
+			passed: true,
+			actualOutput: true,
+			points: true,
+		},
 	},
 	evaluation: {
 		select: {

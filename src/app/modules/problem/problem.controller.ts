@@ -13,7 +13,9 @@ import { problemService } from "./problem.service";
  * baking it into problemService) keeps company-lookup logic in one place
  * (company.service.ts) instead of duplicating it per module.
  */
-const resolveScopeCompanyId = async (user: AuthenticatedUser): Promise<string | undefined> => {
+const resolveScopeCompanyId = async (
+	user: AuthenticatedUser,
+): Promise<string | undefined> => {
 	if (user.role === "ADMIN") return undefined;
 	const company = await companyService.getMyCompany(user.id);
 	return company.id;
@@ -23,7 +25,11 @@ const createProblem = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 	const company = await companyService.getMyCompany(currentUser.id);
 
-	const problem = await problemService.createProblem(company.id, currentUser.id, req.body);
+	const problem = await problemService.createProblem(
+		company.id,
+		currentUser.id,
+		req.body,
+	);
 
 	res.status(StatusCodes.CREATED).json({
 		success: true,
@@ -36,7 +42,10 @@ const getAllProblems = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 	const companyId = await resolveScopeCompanyId(currentUser);
 
-	const result = await problemService.getAllProblems(req.query as Record<string, unknown>, companyId);
+	const result = await problemService.getAllProblems(
+		req.query as Record<string, unknown>,
+		companyId,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
@@ -50,7 +59,10 @@ const getProblemById = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 	const companyId = await resolveScopeCompanyId(currentUser);
 
-	const problem = await problemService.getProblemById(req.params.id as string, companyId);
+	const problem = await problemService.getProblemById(
+		req.params.id as string,
+		companyId,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
@@ -63,7 +75,11 @@ const updateProblem = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 	const company = await companyService.getMyCompany(currentUser.id);
 
-	const problem = await problemService.updateProblem(req.params.id as string, company.id, req.body);
+	const problem = await problemService.updateProblem(
+		req.params.id as string,
+		company.id,
+		req.body,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
@@ -76,7 +92,10 @@ const deleteProblem = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 	const company = await companyService.getMyCompany(currentUser.id);
 
-	const result = await problemService.softDeleteProblem(req.params.id as string, company.id);
+	const result = await problemService.softDeleteProblem(
+		req.params.id as string,
+		company.id,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,

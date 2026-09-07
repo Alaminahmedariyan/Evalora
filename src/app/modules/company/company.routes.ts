@@ -48,7 +48,12 @@ router.patch(
 // isn't knowable from the route alone.
 router.delete("/:id", requireAuth, companyController.deleteCompany);
 
-router.get("/me/subscription", requireAuth, requireRole("RECRUITER"), companyController.getMySubscription);
+router.get(
+	"/me/subscription",
+	requireAuth,
+	requireRole("RECRUITER"),
+	companyController.getMySubscription,
+);
 
 router.patch(
 	"/me/subscription",
@@ -58,6 +63,11 @@ router.patch(
 	companyController.updateMySubscription,
 );
 
-router.post("/me/subscription/cancel", requireAuth, requireRole("RECRUITER"), companyController.cancelMySubscription);
+router.post(
+	"/me/subscription/cancel",
+	requireAuth,
+	requireRole("RECRUITER"),
+	companyController.cancelMySubscription,
+);
 
 export const companyRoutes = router;

@@ -10,9 +10,15 @@ const router = Router();
 
 router.use(requireAuth, requireRole("RECRUITER", "ADMIN"));
 
-router.get("/attempts/:attemptId/submissions", evaluationController.getSubmissionsForAttempt);
+router.get(
+	"/attempts/:attemptId/submissions",
+	evaluationController.getSubmissionsForAttempt,
+);
 
-router.get("/assessments/:assessmentId/pending", evaluationController.getPendingEvaluations);
+router.get(
+	"/assessments/:assessmentId/pending",
+	evaluationController.getPendingEvaluations,
+);
 
 router.get("/submissions/:id", evaluationController.getSubmissionById);
 

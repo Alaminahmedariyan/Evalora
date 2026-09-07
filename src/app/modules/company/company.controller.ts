@@ -10,7 +10,10 @@ import { companyService } from "./company.service";
 const registerCompany = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 
-	const company = await companyService.registerCompany(currentUser.id, req.body);
+	const company = await companyService.registerCompany(
+		currentUser.id,
+		req.body,
+	);
 
 	res.status(StatusCodes.CREATED).json({
 		success: true,
@@ -25,9 +28,13 @@ const registerCompany = catchAsync(async (req: Request, res: Response) => {
  * see verified companies.
  */
 const getAllCompanies = catchAsync(async (req: Request, res: Response) => {
-	const requesterRole = (req.user as AuthenticatedUser | undefined)?.role ?? "CANDIDATE";
+	const requesterRole =
+		(req.user as AuthenticatedUser | undefined)?.role ?? "CANDIDATE";
 
-	const result = await companyService.getAllCompanies(req.query as Record<string, unknown>, requesterRole);
+	const result = await companyService.getAllCompanies(
+		req.query as Record<string, unknown>,
+		requesterRole,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
@@ -68,7 +75,11 @@ const getMyCompany = catchAsync(async (req: Request, res: Response) => {
 const updateMyCompany = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 
-	const company = await companyService.updateMyCompany(currentUser.id, req.body, req.file);
+	const company = await companyService.updateMyCompany(
+		currentUser.id,
+		req.body,
+		req.file,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
@@ -80,7 +91,10 @@ const updateMyCompany = catchAsync(async (req: Request, res: Response) => {
 const verifyCompany = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 
-	const company = await companyService.verifyCompany(req.params.id as string, currentUser.id);
+	const company = await companyService.verifyCompany(
+		req.params.id as string,
+		currentUser.id,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
@@ -120,7 +134,10 @@ const getMySubscription = catchAsync(async (req: Request, res: Response) => {
 const updateMySubscription = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 
-	const subscription = await companyService.updateMySubscription(currentUser.id, req.body.plan);
+	const subscription = await companyService.updateMySubscription(
+		currentUser.id,
+		req.body.plan,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
@@ -132,11 +149,14 @@ const updateMySubscription = catchAsync(async (req: Request, res: Response) => {
 const cancelMySubscription = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 
-	const subscription = await companyService.cancelMySubscription(currentUser.id);
+	const subscription = await companyService.cancelMySubscription(
+		currentUser.id,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
-		message: "Subscription cancelled successfully. It will remain active until the end of the current period.",
+		message:
+			"Subscription cancelled successfully. It will remain active until the end of the current period.",
 		data: subscription,
 	});
 });

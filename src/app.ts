@@ -1,20 +1,27 @@
 import { toNodeHandler } from "better-auth/node";
 import cookieParser from "cookie-parser";
 import cors from "cors";
-import express, { type Application, type NextFunction, type Request, type Response } from "express";
+import express, {
+	type Application,
+	type NextFunction,
+	type Request,
+	type Response,
+} from "express";
 import helmet from "helmet";
 
 import config from "./app/config";
 import { forceHttps } from "./app/middlewares/forceHttps";
-import { generalRateLimiter, authRateLimiter } from "./app/middlewares/rateLimiters";
 import { globalErrorHandler } from "./app/middlewares/globalErrorHandler";
 import { notFound } from "./app/middlewares/notFound";
+import {
+	authRateLimiter,
+	generalRateLimiter,
+} from "./app/middlewares/rateLimiters";
 import { sanitizeBody } from "./app/middlewares/sanitizeBody";
 import { webhookRoutes } from "./app/modules/webhook/webhook.routes";
-
+import { globalRoutes } from "./app/routes";
 import { auth } from "./lib/auth";
 import { prisma } from "./lib/prisma";
-import { globalRoutes } from "./app/routes";
 
 const app: Application = express();
 
@@ -29,19 +36,29 @@ app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use((req: Request, res: Response, next: NextFunction) => {
 	const startedAt = Date.now();
 	res.on("finish", () => {
-		console.log(`${req.method} ${req.originalUrl} ${res.statusCode} ${Date.now() - startedAt}ms`);
+		console.log(
+			`${req.method} ${req.originalUrl} ${res.statusCode} ${Date.now() - startedAt}ms`,
+		);
 	});
 	next();
 });
 
-const allowedOrigins = config.app.clientUrl.split(",").map((origin) => origin.trim());
+const allowedOrigins = config.app.clientUrl
+	.split(",")
+	.map((origin) => origin.trim());
 
 app.use(
 	cors({
 		origin: allowedOrigins,
 		credentials: true,
 		methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-		allowedHeaders: ["Content-Type", "Authorization", "Cookie", "Origin", "X-Requested-With"],
+		allowedHeaders: [
+			"Content-Type",
+			"Authorization",
+			"Cookie",
+			"Origin",
+			"X-Requested-With",
+		],
 	}),
 );
 
@@ -73,7 +90,9 @@ app.use(cookieParser());
 app.use((_req, res, next) => {
 	const originalJson = res.json.bind(res);
 	res.json = (body) => {
-		const json = JSON.stringify(body, (_key, value) => (typeof value === "bigint" ? Number(value) : value));
+		const json = JSON.stringify(body, (_key, value) =>
+			typeof value === "bigint" ? Number(value) : value,
+		);
 		res.setHeader("Content-Type", "application/json");
 		return res.send(json);
 	};
@@ -87,9 +106,13 @@ app.get("/", (_req: Request, res: Response) => {
 app.get("/health", async (_req: Request, res: Response) => {
 	try {
 		await prisma.$queryRaw`SELECT 1`;
-		res.status(200).json({ success: true, status: "healthy", database: "connected" });
+		res
+			.status(200)
+			.json({ success: true, status: "healthy", database: "connected" });
 	} catch {
-		res.status(503).json({ success: false, status: "unhealthy", database: "disconnected" });
+		res
+			.status(503)
+			.json({ success: false, status: "unhealthy", database: "disconnected" });
 	}
 });
 

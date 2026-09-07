@@ -8,11 +8,14 @@ import type { CompanyWhereInput } from "../../../generated/prisma/models/Company
 import { prisma } from "../../../lib/prisma";
 import AppError from "../../errors/appError";
 import { QueryBuilder } from "../../queryBuilder";
-import { generateUniqueSlug } from "../../utils/generateUniqueSlug";
 import { uploadFileToCloudinary } from "../../utils/fileUploader";
+import { generateUniqueSlug } from "../../utils/generateUniqueSlug";
 
 import { COMPANY_DETAIL_SELECT, COMPANY_LIST_SELECT } from "./company.const";
-import type { RegisterCompanyInput, UpdateCompanyInput } from "./company.interface";
+import type {
+	RegisterCompanyInput,
+	UpdateCompanyInput,
+} from "./company.interface";
 
 const companyQueryBuilder = new QueryBuilder<
 	Prisma.CompanyGetPayload<{ select: typeof COMPANY_LIST_SELECT }>,
@@ -40,11 +43,19 @@ const companyQueryBuilder = new QueryBuilder<
  * submission) instead of trying to create a second one, which the unique
  * constraint would reject anyway.
  */
-const registerCompany = async (userId: string, payload: RegisterCompanyInput) => {
-	const existing = await prisma.company.findUnique({ where: { ownerId: userId } });
+const registerCompany = async (
+	userId: string,
+	payload: RegisterCompanyInput,
+) => {
+	const existing = await prisma.company.findUnique({
+		where: { ownerId: userId },
+	});
 
 	if (existing && !existing.deletedAt) {
-		throw new AppError(StatusCodes.CONFLICT, "You already have a company registered.");
+		throw new AppError(
+			StatusCodes.CONFLICT,
+			"You already have a company registered.",
+		);
 	}
 
 	const company = await prisma.$transaction(async (tx) => {
@@ -55,7 +66,9 @@ const registerCompany = async (userId: string, payload: RegisterCompanyInput) =>
 				where: { id: existing.id },
 				data: {
 					name: payload.name,
-					...(payload.description !== undefined && { description: payload.description }),
+					...(payload.description !== undefined && {
+						description: payload.description,
+					}),
 					...(payload.website !== undefined && { website: payload.website }),
 					...(payload.industry !== undefined && { industry: payload.industry }),
 					isVerified: false,
@@ -72,7 +85,9 @@ const registerCompany = async (userId: string, payload: RegisterCompanyInput) =>
 				data: {
 					name: payload.name,
 					slug,
-					...(payload.description !== undefined && { description: payload.description }),
+					...(payload.description !== undefined && {
+						description: payload.description,
+					}),
 					...(payload.website !== undefined && { website: payload.website }),
 					...(payload.industry !== undefined && { industry: payload.industry }),
 					ownerId: userId,
@@ -101,12 +116,20 @@ const registerCompany = async (userId: string, payload: RegisterCompanyInput) =>
  * (softDelete: true in the query builder already excludes deleted rows) —
  * an unverified company is only visible to its owner or an Admin.
  */
-const getAllCompanies = async (query: Record<string, unknown>, requesterRole: UserRole) => {
-	const tenantScope = requesterRole === "ADMIN" ? undefined : { isVerified: true };
+const getAllCompanies = async (
+	query: Record<string, unknown>,
+	requesterRole: UserRole,
+) => {
+	const tenantScope =
+		requesterRole === "ADMIN" ? undefined : { isVerified: true };
 	return companyQueryBuilder.execute(query, tenantScope);
 };
 
-const getCompanyById = async (id: string, requesterId: string, requesterRole: UserRole) => {
+const getCompanyById = async (
+	id: string,
+	requesterId: string,
+	requesterRole: UserRole,
+) => {
 	const company = await prisma.company.findFirst({
 		where: { id, deletedAt: null },
 		select: COMPANY_DETAIL_SELECT,
@@ -116,7 +139,8 @@ const getCompanyById = async (id: string, requesterId: string, requesterRole: Us
 		throw new AppError(StatusCodes.NOT_FOUND, "Company not found.");
 	}
 
-	const canSeeUnverified = requesterRole === "ADMIN" || company.ownerId === requesterId;
+	const canSeeUnverified =
+		requesterRole === "ADMIN" || company.ownerId === requesterId;
 
 	if (!company.isVerified && !canSeeUnverified) {
 		throw new AppError(StatusCodes.NOT_FOUND, "Company not found.");
@@ -132,7 +156,10 @@ const getMyCompany = async (userId: string) => {
 	});
 
 	if (!company) {
-		throw new AppError(StatusCodes.NOT_FOUND, "You don't have a registered company yet.");
+		throw new AppError(
+			StatusCodes.NOT_FOUND,
+			"You don't have a registered company yet.",
+		);
 	}
 
 	return company;
@@ -148,17 +175,26 @@ const updateMyCompany = async (
 	});
 
 	if (!existing) {
-		throw new AppError(StatusCodes.NOT_FOUND, "You don't have a registered company yet.");
+		throw new AppError(
+			StatusCodes.NOT_FOUND,
+			"You don't have a registered company yet.",
+		);
 	}
 
 	const updateData: Prisma.CompanyUpdateInput = {
-		...(payload.description !== undefined && { description: payload.description }),
+		...(payload.description !== undefined && {
+			description: payload.description,
+		}),
 		...(payload.website !== undefined && { website: payload.website }),
 		...(payload.industry !== undefined && { industry: payload.industry }),
 	};
 
 	if (file) {
-		const uploaded = await uploadFileToCloudinary(file.buffer, file.originalname, "company-logos");
+		const uploaded = await uploadFileToCloudinary(
+			file.buffer,
+			file.originalname,
+			"company-logos",
+		);
 		updateData.logo = uploaded.secure_url;
 	}
 
@@ -176,7 +212,9 @@ const updateMyCompany = async (
  * update route.
  */
 const verifyCompany = async (id: string, actorId: string) => {
-	const company = await prisma.company.findFirst({ where: { id, deletedAt: null } });
+	const company = await prisma.company.findFirst({
+		where: { id, deletedAt: null },
+	});
 
 	if (!company) {
 		throw new AppError(StatusCodes.NOT_FOUND, "Company not found.");
@@ -214,8 +252,14 @@ const verifyCompany = async (id: string, actorId: string) => {
  * they register a new/reactivated company later, registerCompany() will
  * promote them again.
  */
-const softDeleteCompany = async (id: string, actorId: string, actorRole: UserRole) => {
-	const company = await prisma.company.findFirst({ where: { id, deletedAt: null } });
+const softDeleteCompany = async (
+	id: string,
+	actorId: string,
+	actorRole: UserRole,
+) => {
+	const company = await prisma.company.findFirst({
+		where: { id, deletedAt: null },
+	});
 
 	if (!company) {
 		throw new AppError(StatusCodes.NOT_FOUND, "Company not found.");
@@ -224,7 +268,10 @@ const softDeleteCompany = async (id: string, actorId: string, actorRole: UserRol
 	const isOwner = company.ownerId === actorId;
 
 	if (!isOwner && actorRole !== "ADMIN") {
-		throw new AppError(StatusCodes.FORBIDDEN, "You don't have permission to delete this company.");
+		throw new AppError(
+			StatusCodes.FORBIDDEN,
+			"You don't have permission to delete this company.",
+		);
 	}
 
 	await prisma.$transaction([
@@ -248,27 +295,48 @@ const getMySubscription = async (userId: string) => {
 	});
 
 	if (!company) {
-		throw new AppError(StatusCodes.NOT_FOUND, "You don't have a registered company yet.");
+		throw new AppError(
+			StatusCodes.NOT_FOUND,
+			"You don't have a registered company yet.",
+		);
 	}
 
 	return company.subscription ?? { message: "No active subscription." };
 };
 
-const updateMySubscription = async (userId: string, plan: "FREE" | "PRO" | "ENTERPRISE") => {
+const updateMySubscription = async (
+	userId: string,
+	plan: "FREE" | "PRO" | "ENTERPRISE",
+) => {
 	const company = await prisma.company.findFirst({
 		where: { ownerId: userId, deletedAt: null },
 	});
 
 	if (!company) {
-		throw new AppError(StatusCodes.NOT_FOUND, "You don't have a registered company yet.");
+		throw new AppError(
+			StatusCodes.NOT_FOUND,
+			"You don't have a registered company yet.",
+		);
 	}
 
 	const periodEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
 	const subscription = await prisma.subscription.upsert({
 		where: { companyId: company.id },
-		update: { plan, status: "ACTIVE", currentPeriodStart: new Date(), currentPeriodEnd: periodEnd, cancelAtPeriodEnd: false },
-		create: { companyId: company.id, plan, status: "ACTIVE", currentPeriodStart: new Date(), currentPeriodEnd: periodEnd },
+		update: {
+			plan,
+			status: "ACTIVE",
+			currentPeriodStart: new Date(),
+			currentPeriodEnd: periodEnd,
+			cancelAtPeriodEnd: false,
+		},
+		create: {
+			companyId: company.id,
+			plan,
+			status: "ACTIVE",
+			currentPeriodStart: new Date(),
+			currentPeriodEnd: periodEnd,
+		},
 	});
 
 	return subscription;
@@ -281,20 +349,36 @@ const cancelMySubscription = async (userId: string) => {
 	});
 
 	if (!company) {
-		throw new AppError(StatusCodes.NOT_FOUND, "You don't have a registered company yet.");
+		throw new AppError(
+			StatusCodes.NOT_FOUND,
+			"You don't have a registered company yet.",
+		);
 	}
 
 	if (!company.subscription) {
-		throw new AppError(StatusCodes.NOT_FOUND, "No active subscription to cancel.");
+		throw new AppError(
+			StatusCodes.NOT_FOUND,
+			"No active subscription to cancel.",
+		);
 	}
 
-	if (company.subscription.status === "CANCELLED" || company.subscription.status === "EXPIRED") {
-		throw new AppError(StatusCodes.CONFLICT, "Subscription is already cancelled or expired.");
+	if (
+		company.subscription.status === "CANCELLED" ||
+		company.subscription.status === "EXPIRED"
+	) {
+		throw new AppError(
+			StatusCodes.CONFLICT,
+			"Subscription is already cancelled or expired.",
+		);
 	}
 
 	const updated = await prisma.subscription.update({
 		where: { companyId: company.id },
-		data: { status: "CANCELLED", cancelledAt: new Date(), cancelAtPeriodEnd: true },
+		data: {
+			status: "CANCELLED",
+			cancelledAt: new Date(),
+			cancelAtPeriodEnd: true,
+		},
 	});
 
 	return updated;

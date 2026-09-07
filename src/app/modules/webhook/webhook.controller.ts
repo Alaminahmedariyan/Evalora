@@ -14,7 +14,10 @@ import { paymentService } from "../payment/payment.service";
 const handleStripeWebhook = catchAsync(async (req: Request, res: Response) => {
 	const signature = req.headers["stripe-signature"] as string | undefined;
 
-	const result = await paymentService.handleStripeWebhook(req.body as Buffer, signature);
+	const result = await paymentService.handleStripeWebhook(
+		req.body as Buffer,
+		signature,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,

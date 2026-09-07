@@ -4,10 +4,9 @@ import type Stripe from "stripe";
 import type { Prisma } from "../../../generated/prisma/client";
 import type { UserRole } from "../../../generated/prisma/enums";
 import type { PaymentWhereInput } from "../../../generated/prisma/models/Payment";
-
-import config from "../../config";
 import { prisma } from "../../../lib/prisma";
 import { getStripe } from "../../../lib/stripe";
+import config from "../../config";
 import AppError from "../../errors/appError";
 import { QueryBuilder } from "../../queryBuilder";
 
@@ -22,9 +21,19 @@ const paymentQueryBuilder = new QueryBuilder<
 	filterableFields: {
 		status: {
 			type: "enum",
-			enum: { PENDING: "PENDING", PROCESSING: "PROCESSING", PAID: "PAID", FAILED: "FAILED", CANCELLED: "CANCELLED", REFUNDED: "REFUNDED" },
+			enum: {
+				PENDING: "PENDING",
+				PROCESSING: "PROCESSING",
+				PAID: "PAID",
+				FAILED: "FAILED",
+				CANCELLED: "CANCELLED",
+				REFUNDED: "REFUNDED",
+			},
 		},
-		provider: { type: "enum", enum: { STRIPE: "STRIPE", BKASH: "BKASH", SSLCOMMERZ: "SSLCOMMERZ" } },
+		provider: {
+			type: "enum",
+			enum: { STRIPE: "STRIPE", BKASH: "BKASH", SSLCOMMERZ: "SSLCOMMERZ" },
+		},
 		createdAt: "date",
 	},
 	sortableFields: ["createdAt", "amountMinor"],
@@ -38,10 +47,15 @@ const paymentQueryBuilder = new QueryBuilder<
  * the session's metadata so the webhook handler — which only ever sees
  * the Stripe event, never the original request — knows what to update.
  */
-const createCheckoutSession = async (userId: string, companyId: string, payload: CreateCheckoutInput) => {
+const createCheckoutSession = async (
+	userId: string,
+	companyId: string,
+	payload: CreateCheckoutInput,
+) => {
 	const pricing = PLAN_PRICING[payload.plan];
 	const stripe = getStripe();
-	const clientUrl = config.app.clientUrl.split(",")[0]?.trim() ?? "http://localhost:3000";
+	const clientUrl =
+		config.app.clientUrl.split(",")[0]?.trim() ?? "http://localhost:3000";
 
 	const payment = await prisma.payment.create({
 		data: {
@@ -87,22 +101,38 @@ const createCheckoutSession = async (userId: string, companyId: string, payload:
  * delivery (Stripe retries on anything but a fast 2xx) is a no-op instead
  * of double-crediting a subscription.
  */
-const handleStripeWebhook = async (rawBody: Buffer, signature: string | undefined) => {
+const handleStripeWebhook = async (
+	rawBody: Buffer,
+	signature: string | undefined,
+) => {
 	const stripe = getStripe();
 
 	if (!config.stripe.webhookSecret) {
-		throw new AppError(StatusCodes.SERVICE_UNAVAILABLE, "Stripe webhook secret is not configured.");
+		throw new AppError(
+			StatusCodes.SERVICE_UNAVAILABLE,
+			"Stripe webhook secret is not configured.",
+		);
 	}
 
 	if (!signature) {
-		throw new AppError(StatusCodes.BAD_REQUEST, "Missing Stripe signature header.");
+		throw new AppError(
+			StatusCodes.BAD_REQUEST,
+			"Missing Stripe signature header.",
+		);
 	}
 
 	let event: Stripe.Event;
 	try {
-		event = stripe.webhooks.constructEvent(rawBody, signature, config.stripe.webhookSecret);
+		event = stripe.webhooks.constructEvent(
+			rawBody,
+			signature,
+			config.stripe.webhookSecret,
+		);
 	} catch {
-		throw new AppError(StatusCodes.BAD_REQUEST, "Invalid Stripe webhook signature.");
+		throw new AppError(
+			StatusCodes.BAD_REQUEST,
+			"Invalid Stripe webhook signature.",
+		);
 	}
 
 	const existingEvent = await prisma.paymentWebhookEvent.findUnique({
@@ -133,7 +163,8 @@ const handleStripeWebhook = async (rawBody: Buffer, signature: string | undefine
 		if (paymentId) {
 			await prisma.$transaction(async (tx) => {
 				const paymentIntent = session.payment_intent;
-				const transactionId = typeof paymentIntent === "string" ? paymentIntent : paymentIntent?.id;
+				const transactionId =
+					typeof paymentIntent === "string" ? paymentIntent : paymentIntent?.id;
 
 				const payment = await tx.payment.update({
 					where: { id: paymentId },
@@ -149,11 +180,26 @@ const handleStripeWebhook = async (rawBody: Buffer, signature: string | undefine
 
 					const subscription = await tx.subscription.upsert({
 						where: { companyId },
-						update: { plan, status: "ACTIVE", currentPeriodStart: new Date(), currentPeriodEnd: periodEnd, cancelAtPeriodEnd: false },
-						create: { companyId, plan, status: "ACTIVE", currentPeriodStart: new Date(), currentPeriodEnd: periodEnd },
+						update: {
+							plan,
+							status: "ACTIVE",
+							currentPeriodStart: new Date(),
+							currentPeriodEnd: periodEnd,
+							cancelAtPeriodEnd: false,
+						},
+						create: {
+							companyId,
+							plan,
+							status: "ACTIVE",
+							currentPeriodStart: new Date(),
+							currentPeriodEnd: periodEnd,
+						},
 					});
 
-					await tx.payment.update({ where: { id: paymentId }, data: { subscriptionId: subscription.id } });
+					await tx.payment.update({
+						where: { id: paymentId },
+						data: { subscriptionId: subscription.id },
+					});
 				}
 
 				await tx.notification.create({
@@ -166,7 +212,10 @@ const handleStripeWebhook = async (rawBody: Buffer, signature: string | undefine
 				});
 			});
 		}
-	} else if (event.type === "checkout.session.expired" || event.type === "payment_intent.payment_failed") {
+	} else if (
+		event.type === "checkout.session.expired" ||
+		event.type === "payment_intent.payment_failed"
+	) {
 		const session = event.data.object as { metadata?: { paymentId?: string } };
 		const paymentId = session.metadata?.paymentId;
 
@@ -195,7 +244,10 @@ const handleStripeWebhook = async (rawBody: Buffer, signature: string | undefine
 	return { received: true };
 };
 
-const getMyPayments = async (userId: string, query: Record<string, unknown>) => {
+const getMyPayments = async (
+	userId: string,
+	query: Record<string, unknown>,
+) => {
 	return paymentQueryBuilder.execute(query, { userId });
 };
 
@@ -203,15 +255,24 @@ const getAllPayments = async (query: Record<string, unknown>) => {
 	return paymentQueryBuilder.execute(query);
 };
 
-const getPaymentById = async (id: string, requester: { id: string; role: UserRole }) => {
-	const payment = await prisma.payment.findUnique({ where: { id }, select: PAYMENT_SELECT });
+const getPaymentById = async (
+	id: string,
+	requester: { id: string; role: UserRole },
+) => {
+	const payment = await prisma.payment.findUnique({
+		where: { id },
+		select: PAYMENT_SELECT,
+	});
 
 	if (!payment) {
 		throw new AppError(StatusCodes.NOT_FOUND, "Payment not found.");
 	}
 
 	if (requester.role !== "ADMIN" && payment.userId !== requester.id) {
-		throw new AppError(StatusCodes.FORBIDDEN, "You don't have permission to view this payment.");
+		throw new AppError(
+			StatusCodes.FORBIDDEN,
+			"You don't have permission to view this payment.",
+		);
 	}
 
 	return payment;

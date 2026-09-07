@@ -13,7 +13,13 @@ const getMyConsents = async (userId: string) => {
 		orderBy: { grantedAt: "desc" },
 	});
 
-	const allTypes = ["MARKETING", "ANALYTICS", "THIRD_PARTY", "PRIVACY_POLICY", "TERMS_OF_SERVICE"] as const;
+	const allTypes = [
+		"MARKETING",
+		"ANALYTICS",
+		"THIRD_PARTY",
+		"PRIVACY_POLICY",
+		"TERMS_OF_SERVICE",
+	] as const;
 
 	const result: ConsentResponse[] = allTypes.map((type) => {
 		const existing = consents.find((c) => c.consentType === type);
@@ -41,13 +47,17 @@ const updateConsent = async (userId: string, payload: UpdateConsentInput) => {
 	if (existing) {
 		if (existing.granted === payload.granted) {
 			return await prisma.userConsent.findUniqueOrThrow({
-				where: { userId_consentType: { userId, consentType: payload.consentType } },
+				where: {
+					userId_consentType: { userId, consentType: payload.consentType },
+				},
 				select: CONSENT_SELECT,
 			});
 		}
 
 		return await prisma.userConsent.update({
-			where: { userId_consentType: { userId, consentType: payload.consentType } },
+			where: {
+				userId_consentType: { userId, consentType: payload.consentType },
+			},
 			data: {
 				granted: payload.granted,
 				...(payload.granted ? { revokedAt: null } : { revokedAt: new Date() }),
@@ -77,7 +87,10 @@ const revokeConsent = async (userId: string, consentType: string) => {
 	}
 
 	if (!existing.granted) {
-		throw new AppError(StatusCodes.CONFLICT, "This consent is already revoked.");
+		throw new AppError(
+			StatusCodes.CONFLICT,
+			"This consent is already revoked.",
+		);
 	}
 
 	return prisma.userConsent.update({

@@ -8,7 +8,11 @@ const mcqOptionSchema = z.object({
 
 const testCaseSchema = z.object({
 	input: z.string().max(5000).optional(),
-	expectedOutput: z.string().trim().min(1, "Expected output is required.").max(5000),
+	expectedOutput: z
+		.string()
+		.trim()
+		.min(1, "Expected output is required.")
+		.max(5000),
 	isSample: z.boolean().optional(),
 	points: z.coerce.number().int().min(0).max(1000).optional(),
 	timeLimitMs: z.coerce.number().int().positive().optional(),
@@ -16,17 +20,32 @@ const testCaseSchema = z.object({
 });
 
 const baseFields = {
-	title: z.string().trim().min(3, "Title must be at least 3 characters.").max(200),
-	description: z.string().trim().min(10, "Description must be at least 10 characters.").max(10000),
+	title: z
+		.string()
+		.trim()
+		.min(3, "Title must be at least 3 characters.")
+		.max(200),
+	description: z
+		.string()
+		.trim()
+		.min(10, "Description must be at least 10 characters.")
+		.max(10000),
 	difficulty: z.enum(["EASY", "MEDIUM", "HARD"]).optional(),
-	defaultMarks: z.coerce.number().int().min(1, "Marks must be at least 1.").max(1000).optional(),
+	defaultMarks: z.coerce
+		.number()
+		.int()
+		.min(1, "Marks must be at least 1.")
+		.max(1000)
+		.optional(),
 	isPublic: z.boolean().optional(),
 };
 
 const mcqCreateSchema = z.object({
 	...baseFields,
 	type: z.literal("MCQ"),
-	mcqType: z.enum(["SINGLE_CHOICE", "MULTIPLE_CHOICE"]).default("SINGLE_CHOICE"),
+	mcqType: z
+		.enum(["SINGLE_CHOICE", "MULTIPLE_CHOICE"])
+		.default("SINGLE_CHOICE"),
 	explanation: z.string().trim().max(2000).optional(),
 	options: z
 		.array(mcqOptionSchema)
@@ -54,7 +73,11 @@ const writtenCreateSchema = z.object({
  * below, which runs after the union has already picked a branch.
  */
 export const createProblemSchema = z
-	.discriminatedUnion("type", [mcqCreateSchema, codingCreateSchema, writtenCreateSchema])
+	.discriminatedUnion("type", [
+		mcqCreateSchema,
+		codingCreateSchema,
+		writtenCreateSchema,
+	])
 	.superRefine((data, ctx) => {
 		if (data.type !== "MCQ") return;
 
@@ -67,7 +90,9 @@ export const createProblemSchema = z
 			});
 		}
 
-		const correctCount = data.options.filter((option) => option.isCorrect).length;
+		const correctCount = data.options.filter(
+			(option) => option.isCorrect,
+		).length;
 
 		if (correctCount === 0) {
 			ctx.addIssue({
@@ -80,7 +105,8 @@ export const createProblemSchema = z
 		if (data.mcqType === "SINGLE_CHOICE" && correctCount > 1) {
 			ctx.addIssue({
 				code: "custom",
-				message: "SINGLE_CHOICE questions must have exactly one correct option.",
+				message:
+					"SINGLE_CHOICE questions must have exactly one correct option.",
 				path: ["options"],
 			});
 		}
@@ -110,7 +136,11 @@ export const updateProblemSchema = z
 
 		const orders = data.options.map((option) => option.order);
 		if (new Set(orders).size !== orders.length) {
-			ctx.addIssue({ code: "custom", message: "Option order values must be unique.", path: ["options"] });
+			ctx.addIssue({
+				code: "custom",
+				message: "Option order values must be unique.",
+				path: ["options"],
+			});
 		}
 
 		if (!data.options.some((option) => option.isCorrect)) {

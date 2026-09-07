@@ -17,9 +17,17 @@ router.post(
 	problemController.createProblem,
 );
 
-router.get("/", requireRole("RECRUITER", "ADMIN"), problemController.getAllProblems);
+router.get(
+	"/",
+	requireRole("RECRUITER", "ADMIN"),
+	problemController.getAllProblems,
+);
 
-router.get("/:id", requireRole("RECRUITER", "ADMIN"), problemController.getProblemById);
+router.get(
+	"/:id",
+	requireRole("RECRUITER", "ADMIN"),
+	problemController.getProblemById,
+);
 
 router.patch(
 	"/:id",
@@ -28,6 +36,10 @@ router.patch(
 	problemController.updateProblem,
 );
 
-router.delete("/:id", requireRole("RECRUITER"), problemController.deleteProblem);
+router.delete(
+	"/:id",
+	requireRole("RECRUITER"),
+	problemController.deleteProblem,
+);
 
 export const problemRoutes = router;

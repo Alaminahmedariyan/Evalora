@@ -103,10 +103,7 @@ export const getBkashIdToken = async (): Promise<string> => {
 	);
 
 	if (!response.ok) {
-		throw new AppError(
-			StatusCodes.BAD_GATEWAY,
-			"bKash token grant failed.",
-		);
+		throw new AppError(StatusCodes.BAD_GATEWAY, "bKash token grant failed.");
 	}
 
 	const result = (await response.json()) as BkashTokenResponse;

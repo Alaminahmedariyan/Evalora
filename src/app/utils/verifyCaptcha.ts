@@ -36,9 +36,6 @@ export const verifyCaptcha = async (token: string): Promise<void> => {
 	const result = (await response.json()) as HCaptchaResponse;
 
 	if (!result.success) {
-		throw new AppError(
-			StatusCodes.BAD_REQUEST,
-			"Captcha verification failed.",
-		);
+		throw new AppError(StatusCodes.BAD_REQUEST, "Captcha verification failed.");
 	}
 };

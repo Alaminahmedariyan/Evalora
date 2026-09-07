@@ -5,7 +5,9 @@ import { auth } from "../src/lib/auth";
 import { prisma } from "../src/lib/prisma";
 
 async function ensureAdmin() {
-	const existing = await prisma.user.findUnique({ where: { email: config.superAdmin.email } });
+	const existing = await prisma.user.findUnique({
+		where: { email: config.superAdmin.email },
+	});
 
 	if (existing) {
 		await prisma.user.update({
@@ -29,7 +31,9 @@ async function ensureAdmin() {
 		},
 	});
 
-	const user = await prisma.user.findUniqueOrThrow({ where: { email: config.superAdmin.email } });
+	const user = await prisma.user.findUniqueOrThrow({
+		where: { email: config.superAdmin.email },
+	});
 
 	await prisma.user.update({
 		where: { id: user.id },

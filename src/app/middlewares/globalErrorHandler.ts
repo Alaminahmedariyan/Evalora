@@ -3,9 +3,9 @@ import { StatusCodes } from "http-status-codes";
 import { ZodError } from "zod";
 
 import config from "../config";
-import { handleZodError } from "../errors/handleZodError";
-import { handlePrismaError } from "../errors/handlePrismaError";
 import AppError from "../errors/appError";
+import { handlePrismaError } from "../errors/handlePrismaError";
+import { handleZodError } from "../errors/handleZodError";
 
 export const globalErrorHandler = (
 	error: unknown,

@@ -25,7 +25,12 @@ export const welcomeEmailTemplate = (name: string) => `
   </div>
 `;
 
-export const otpEmailTemplate = (name: string, otp: string, expirationMinutes: number, purpose = "verify your email") => `
+export const otpEmailTemplate = (
+	name: string,
+	otp: string,
+	expirationMinutes: number,
+	purpose = "verify your email",
+) => `
   <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; color: #111;">
     <h2>Verification Code</h2>
     <p>Hi ${name}, use the code below to ${purpose}.</p>

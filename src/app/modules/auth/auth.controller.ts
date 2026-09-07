@@ -87,17 +87,15 @@ const verifyEmailOtp = catchAsync(async (req: Request, res: Response) => {
 	});
 });
 
-const resetPasswordWithOtp = catchAsync(
-	async (req: Request, res: Response) => {
-		const { data } = await authService.resetPasswordWithOtp(req.body);
+const resetPasswordWithOtp = catchAsync(async (req: Request, res: Response) => {
+	const { data } = await authService.resetPasswordWithOtp(req.body);
 
-		res.status(StatusCodes.OK).json({
-			success: true,
-			message: "Password reset successfully. You can now log in.",
-			data,
-		});
-	},
-);
+	res.status(StatusCodes.OK).json({
+		success: true,
+		message: "Password reset successfully. You can now log in.",
+		data,
+	});
+});
 
 const changePassword = catchAsync(async (req: Request, res: Response) => {
 	const { data, headers } = await authService.changePassword(

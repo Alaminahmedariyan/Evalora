@@ -9,7 +9,11 @@ import { candidateService } from "./candidate.service";
 const upsertMyProfile = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 
-	const profile = await candidateService.upsertMyProfile(currentUser.id, req.body, req.file);
+	const profile = await candidateService.upsertMyProfile(
+		currentUser.id,
+		req.body,
+		req.file,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
@@ -30,18 +34,24 @@ const getMyProfile = catchAsync(async (req: Request, res: Response) => {
 	});
 });
 
-const getCandidateProfileById = catchAsync(async (req: Request, res: Response) => {
-	const profile = await candidateService.getCandidateProfileById(req.params.id as string);
+const getCandidateProfileById = catchAsync(
+	async (req: Request, res: Response) => {
+		const profile = await candidateService.getCandidateProfileById(
+			req.params.id as string,
+		);
 
-	res.status(StatusCodes.OK).json({
-		success: true,
-		message: "Candidate profile retrieved successfully.",
-		data: profile,
-	});
-});
+		res.status(StatusCodes.OK).json({
+			success: true,
+			message: "Candidate profile retrieved successfully.",
+			data: profile,
+		});
+	},
+);
 
 const getAllCandidates = catchAsync(async (req: Request, res: Response) => {
-	const result = await candidateService.getAllCandidates(req.query as Record<string, unknown>);
+	const result = await candidateService.getAllCandidates(
+		req.query as Record<string, unknown>,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,

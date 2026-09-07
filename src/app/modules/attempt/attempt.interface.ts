@@ -18,7 +18,12 @@ export type ManualEvaluationInput = {
 	score: number;
 	feedback?: string;
 	/** Per-test-case pass/fail, only meaningful for CODING submissions. */
-	testCaseResults?: { testCaseId: string; passed: boolean; actualOutput?: string; points?: number }[];
+	testCaseResults?: {
+		testCaseId: string;
+		passed: boolean;
+		actualOutput?: string;
+		points?: number;
+	}[];
 };
 
 export type ProctoringEventInput = {

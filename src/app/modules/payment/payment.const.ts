@@ -2,7 +2,10 @@
  * Fixed pricing per plan, in minor units (cents) — matches `Payment.amountMinor`.
  * FREE has no checkout flow; it's the default a company starts on.
  */
-export const PLAN_PRICING: Record<"PRO" | "ENTERPRISE", { amountMinor: number; currency: string }> = {
+export const PLAN_PRICING: Record<
+	"PRO" | "ENTERPRISE",
+	{ amountMinor: number; currency: string }
+> = {
 	PRO: { amountMinor: 2900, currency: "usd" },
 	ENTERPRISE: { amountMinor: 9900, currency: "usd" },
 };

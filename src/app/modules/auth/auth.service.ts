@@ -1,7 +1,7 @@
 import { StatusCodes } from "http-status-codes";
-
-import AppError from "../../errors/appError";
 import { auth } from "../../../lib/auth";
+import AppError from "../../errors/appError";
+import { AUTH_FALLBACK_MESSAGES } from "./auth.const";
 import type {
 	ChangePasswordInput,
 	LoginInput,
@@ -10,7 +10,6 @@ import type {
 	SendEmailOtpInput,
 	VerifyEmailOtpInput,
 } from "./auth.interface";
-import { AUTH_FALLBACK_MESSAGES } from "./auth.const";
 
 const callAuthEndpoint = async (
 	responsePromise: Promise<Response>,
@@ -20,7 +19,10 @@ const callAuthEndpoint = async (
 	const body = await response.json().catch(() => null);
 
 	if (!response.ok) {
-		console.error(`[Auth] ${response.status} error:`, body ?? response.statusText);
+		console.error(
+			`[Auth] ${response.status} error:`,
+			body ?? response.statusText,
+		);
 		throw new AppError(
 			response.status,
 			(body as { message?: string } | null)?.message ?? fallbackMessage,

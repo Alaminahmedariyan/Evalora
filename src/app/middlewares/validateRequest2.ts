@@ -5,13 +5,19 @@ import type { z } from "zod";
 import AppError from "../errors/appError";
 
 export const validateRequestWithFile = (schema: z.ZodTypeAny) => {
-	return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
+	return async (
+		req: Request,
+		_res: Response,
+		next: NextFunction,
+	): Promise<void> => {
 		try {
 			if (req.body?.data) {
 				req.body = JSON.parse(req.body.data);
 			}
 		} catch {
-			return next(new AppError(StatusCodes.BAD_REQUEST, "Invalid JSON in 'data' field."));
+			return next(
+				new AppError(StatusCodes.BAD_REQUEST, "Invalid JSON in 'data' field."),
+			);
 		}
 
 		const result = await schema.safeParseAsync(req.body ?? {});

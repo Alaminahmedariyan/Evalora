@@ -1,29 +1,55 @@
-export type FieldType = "string" | "number" | "decimal" | "boolean" | "date" | "enum";
+export type FieldType =
+	| "string"
+	| "number"
+	| "decimal"
+	| "boolean"
+	| "date"
+	| "enum";
 
 export type FilterOperator =
-	| "eq" | "not" | "gt" | "gte" | "lt" | "lte" | "in" | "notIn" | "contains" | "startsWith" | "endsWith";
+	| "eq"
+	| "not"
+	| "gt"
+	| "gte"
+	| "lt"
+	| "lte"
+	| "in"
+	| "notIn"
+	| "contains"
+	| "startsWith"
+	| "endsWith";
 
 export type EnumFilterConfig = { type: "enum"; enum: Record<string, string> };
 
-export type FilterConfig = "string" | "number" | "decimal" | "boolean" | "date" | EnumFilterConfig;
+export type FilterConfig =
+	| "string"
+	| "number"
+	| "decimal"
+	| "boolean"
+	| "date"
+	| EnumFilterConfig;
 
 export type QueryConfig = {
-    searchableFields?: string[];
-    filterableFields: Record<string, FilterConfig>;
-    sortableFields: string[];
-    includableRelations?: string[];
-    defaultInclude?: Record<string, boolean>;
-    defaultSelect?: Record<string, unknown>;
-    softDelete?: boolean;
-    maxLimit?: number;
-    selectableFields?: string[];
-    defaultSortField?: string;
-    maxInclude?: number;
-    maxNestedDepth?: number;
-    maxSearchLength?: number;
+	searchableFields?: string[];
+	filterableFields: Record<string, FilterConfig>;
+	sortableFields: string[];
+	includableRelations?: string[];
+	defaultInclude?: Record<string, boolean>;
+	defaultSelect?: Record<string, unknown>;
+	softDelete?: boolean;
+	maxLimit?: number;
+	selectableFields?: string[];
+	defaultSortField?: string;
+	maxInclude?: number;
+	maxNestedDepth?: number;
+	maxSearchLength?: number;
 };
 
-export type ParsedFilter = { field: string; operator: FilterOperator; value: unknown };
+export type ParsedFilter = {
+	field: string;
+	operator: FilterOperator;
+	value: unknown;
+};
 export type ParsedSort = { field: string; order: "asc" | "desc" };
 
 export type ParsedQuery = {
@@ -46,7 +72,12 @@ export type PrismaQueryArgs = {
 	include?: Record<string, unknown>;
 };
 
-export type Meta = { page: number; limit: number; total: number; totalPage: number };
+export type Meta = {
+	page: number;
+	limit: number;
+	total: number;
+	totalPage: number;
+};
 export type QueryResult<T> = { data: T[]; meta: Meta };
 
 export type PrismaDelegate<T, TWhereInput = Record<string, unknown>> = {

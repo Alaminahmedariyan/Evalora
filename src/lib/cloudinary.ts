@@ -8,18 +8,21 @@ const { cloudName, apiKey, apiSecret } = config.cloudinary;
 const isCloudinaryConfigured = Boolean(cloudName && apiKey && apiSecret);
 
 if (cloudName && apiKey && apiSecret) {
-    cloudinary.config({
-        cloud_name: cloudName,
-        api_key: apiKey,
-        api_secret: apiSecret,
-    });
+	cloudinary.config({
+		cloud_name: cloudName,
+		api_key: apiKey,
+		api_secret: apiSecret,
+	});
 }
 
 export const getCloudinary = () => {
-    if (!isCloudinaryConfigured) {
-        throw new AppError(503, "Cloudinary is not configured. Set CLOUDINARY_* env vars.");
-    }
-    return cloudinary;
+	if (!isCloudinaryConfigured) {
+		throw new AppError(
+			503,
+			"Cloudinary is not configured. Set CLOUDINARY_* env vars.",
+		);
+	}
+	return cloudinary;
 };
 
 export { cloudinary };

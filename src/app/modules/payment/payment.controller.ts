@@ -7,23 +7,32 @@ import { companyService } from "../company/company.service";
 
 import { paymentService } from "./payment.service";
 
-const createCheckoutSession = catchAsync(async (req: Request, res: Response) => {
-	const currentUser = req.user as AuthenticatedUser;
-	const company = await companyService.getMyCompany(currentUser.id);
+const createCheckoutSession = catchAsync(
+	async (req: Request, res: Response) => {
+		const currentUser = req.user as AuthenticatedUser;
+		const company = await companyService.getMyCompany(currentUser.id);
 
-	const result = await paymentService.createCheckoutSession(currentUser.id, company.id, req.body);
+		const result = await paymentService.createCheckoutSession(
+			currentUser.id,
+			company.id,
+			req.body,
+		);
 
-	res.status(StatusCodes.CREATED).json({
-		success: true,
-		message: "Checkout session created.",
-		data: result,
-	});
-});
+		res.status(StatusCodes.CREATED).json({
+			success: true,
+			message: "Checkout session created.",
+			data: result,
+		});
+	},
+);
 
 const getMyPayments = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 
-	const result = await paymentService.getMyPayments(currentUser.id, req.query as Record<string, unknown>);
+	const result = await paymentService.getMyPayments(
+		currentUser.id,
+		req.query as Record<string, unknown>,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
@@ -34,7 +43,9 @@ const getMyPayments = catchAsync(async (req: Request, res: Response) => {
 });
 
 const getAllPayments = catchAsync(async (req: Request, res: Response) => {
-	const result = await paymentService.getAllPayments(req.query as Record<string, unknown>);
+	const result = await paymentService.getAllPayments(
+		req.query as Record<string, unknown>,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,

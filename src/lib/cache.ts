@@ -1,6 +1,5 @@
 import { redis } from "./radis";
 
-
 const DEFAULT_TTL_SECONDS = 60;
 
 export const getOrSetCache = async <T>(
@@ -35,4 +34,3 @@ export const invalidateCache = async (key: string): Promise<void> => {
 		console.error(`[Cache] Failed to invalidate key "${key}":`, error);
 	}
 };
-

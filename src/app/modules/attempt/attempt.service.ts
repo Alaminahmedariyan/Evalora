@@ -7,7 +7,10 @@ import { prisma } from "../../../lib/prisma";
 import AppError from "../../errors/appError";
 
 import { ATTEMPT_DETAIL_SELECT } from "./attempt.const";
-import type { ProctoringEventInput, SaveSubmissionInput } from "./attempt.interface";
+import type {
+	ProctoringEventInput,
+	SaveSubmissionInput,
+} from "./attempt.interface";
 import { gradeSubmissionForProblem, recomputeResult } from "./grading.util";
 
 /**
@@ -24,7 +27,11 @@ const finalizeAttempt = async (attemptId: string) => {
 		where: { id: attemptId },
 		include: {
 			assessment: {
-				include: { assessmentProblems: { include: { problem: { select: { id: true, type: true } } } } },
+				include: {
+					assessmentProblems: {
+						include: { problem: { select: { id: true, type: true } } },
+					},
+				},
 			},
 		},
 	});
@@ -65,7 +72,10 @@ const getAttemptById = async (
 	id: string,
 	requester: { id: string; role: UserRole; companyId?: string },
 ) => {
-	let attempt = await prisma.assessmentAttempt.findUnique({ where: { id }, select: ATTEMPT_DETAIL_SELECT });
+	let attempt = await prisma.assessmentAttempt.findUnique({
+		where: { id },
+		select: ATTEMPT_DETAIL_SELECT,
+	});
 
 	if (!attempt) {
 		throw new AppError(StatusCodes.NOT_FOUND, "Attempt not found.");
@@ -73,16 +83,23 @@ const getAttemptById = async (
 
 	const isOwner = attempt.candidateId === requester.id;
 	const isOwningRecruiter =
-		requester.companyId !== undefined && attempt.assessment.companyId === requester.companyId;
+		requester.companyId !== undefined &&
+		attempt.assessment.companyId === requester.companyId;
 
 	if (requester.role !== "ADMIN" && !isOwner && !isOwningRecruiter) {
-		throw new AppError(StatusCodes.FORBIDDEN, "You don't have permission to view this attempt.");
+		throw new AppError(
+			StatusCodes.FORBIDDEN,
+			"You don't have permission to view this attempt.",
+		);
 	}
 
 	// Lazy auto-expire — catches attempts nobody explicitly submitted in time.
 	if (attempt.status === "IN_PROGRESS" && attempt.expiresAt < new Date()) {
 		await finalizeAttempt(id);
-		attempt = await prisma.assessmentAttempt.findUniqueOrThrow({ where: { id }, select: ATTEMPT_DETAIL_SELECT });
+		attempt = await prisma.assessmentAttempt.findUniqueOrThrow({
+			where: { id },
+			select: ATTEMPT_DETAIL_SELECT,
+		});
 	}
 
 	return attempt;
@@ -106,25 +123,41 @@ const startAttempt = async (candidateId: string, assessmentId: string) => {
 	}
 
 	if (assessment.status !== "PUBLISHED" && assessment.status !== "ACTIVE") {
-		throw new AppError(StatusCodes.CONFLICT, "This assessment is not currently open for attempts.");
+		throw new AppError(
+			StatusCodes.CONFLICT,
+			"This assessment is not currently open for attempts.",
+		);
 	}
 
 	const now = new Date();
 
 	if (assessment.startAt && now < assessment.startAt) {
-		throw new AppError(StatusCodes.CONFLICT, "This assessment has not started yet.");
+		throw new AppError(
+			StatusCodes.CONFLICT,
+			"This assessment has not started yet.",
+		);
 	}
 
 	if (assessment.endAt && now > assessment.endAt) {
-		throw new AppError(StatusCodes.CONFLICT, "This assessment's window has closed.");
+		throw new AppError(
+			StatusCodes.CONFLICT,
+			"This assessment's window has closed.",
+		);
 	}
 
 	const invitation = await prisma.assessmentInvitation.findFirst({
-		where: { assessmentId, candidateId, status: { in: ["ACCEPTED", "COMPLETED"] } },
+		where: {
+			assessmentId,
+			candidateId,
+			status: { in: ["ACCEPTED", "COMPLETED"] },
+		},
 	});
 
 	if (!invitation) {
-		throw new AppError(StatusCodes.FORBIDDEN, "You need an accepted invitation to start this assessment.");
+		throw new AppError(
+			StatusCodes.FORBIDDEN,
+			"You need an accepted invitation to start this assessment.",
+		);
 	}
 
 	// Resume an already-running, not-yet-expired attempt instead of starting
@@ -135,13 +168,18 @@ const startAttempt = async (candidateId: string, assessmentId: string) => {
 
 	if (inProgress) {
 		if (inProgress.expiresAt >= now) {
-			return getAttemptById(inProgress.id, { id: candidateId, role: "CANDIDATE" });
+			return getAttemptById(inProgress.id, {
+				id: candidateId,
+				role: "CANDIDATE",
+			});
 		}
 		// Stale — finalize it before allowing a fresh attempt.
 		await finalizeAttempt(inProgress.id);
 	}
 
-	const attemptCount = await prisma.assessmentAttempt.count({ where: { assessmentId, candidateId } });
+	const attemptCount = await prisma.assessmentAttempt.count({
+		where: { assessmentId, candidateId },
+	});
 
 	if (attemptCount >= assessment.maxAttempts) {
 		throw new AppError(
@@ -186,7 +224,12 @@ const saveSubmission = async (
 		where: { id: attemptId, candidateId },
 		include: {
 			assessment: {
-				include: { assessmentProblems: { where: { problemId }, include: { problem: true } } },
+				include: {
+					assessmentProblems: {
+						where: { problemId },
+						include: { problem: true },
+					},
+				},
 			},
 		},
 	});
@@ -197,7 +240,10 @@ const saveSubmission = async (
 
 	if (attempt.status === "IN_PROGRESS" && attempt.expiresAt < new Date()) {
 		await finalizeAttempt(attemptId);
-		throw new AppError(StatusCodes.GONE, "Time is up — this attempt has been auto-submitted.");
+		throw new AppError(
+			StatusCodes.GONE,
+			"Time is up — this attempt has been auto-submitted.",
+		);
 	}
 
 	if (attempt.status !== "IN_PROGRESS") {
@@ -210,7 +256,10 @@ const saveSubmission = async (
 	const assessmentProblem = attempt.assessment.assessmentProblems[0];
 
 	if (!assessmentProblem) {
-		throw new AppError(StatusCodes.BAD_REQUEST, "This problem is not part of this assessment.");
+		throw new AppError(
+			StatusCodes.BAD_REQUEST,
+			"This problem is not part of this assessment.",
+		);
 	}
 
 	const { problem } = assessmentProblem;
@@ -218,7 +267,10 @@ const saveSubmission = async (
 
 	if (problem.type === "MCQ") {
 		if (!payload.selectedOptionIds || payload.selectedOptionIds.length === 0) {
-			throw new AppError(StatusCodes.BAD_REQUEST, "selectedOptionIds is required for an MCQ problem.");
+			throw new AppError(
+				StatusCodes.BAD_REQUEST,
+				"selectedOptionIds is required for an MCQ problem.",
+			);
 		}
 
 		const mcqProblem = await prisma.mcqProblem.findUniqueOrThrow({
@@ -226,24 +278,43 @@ const saveSubmission = async (
 			include: { options: { select: { id: true } } },
 		});
 
-		const validOptionIds = new Set(mcqProblem.options.map((option) => option.id));
-		const hasInvalidOption = payload.selectedOptionIds.some((id) => !validOptionIds.has(id));
+		const validOptionIds = new Set(
+			mcqProblem.options.map((option) => option.id),
+		);
+		const hasInvalidOption = payload.selectedOptionIds.some(
+			(id) => !validOptionIds.has(id),
+		);
 
 		if (hasInvalidOption) {
-			throw new AppError(StatusCodes.BAD_REQUEST, "One or more selected options do not belong to this problem.");
+			throw new AppError(
+				StatusCodes.BAD_REQUEST,
+				"One or more selected options do not belong to this problem.",
+			);
 		}
 
-		if (mcqProblem.type === "SINGLE_CHOICE" && payload.selectedOptionIds.length > 1) {
-			throw new AppError(StatusCodes.BAD_REQUEST, "This is a single-choice question — select only one option.");
+		if (
+			mcqProblem.type === "SINGLE_CHOICE" &&
+			payload.selectedOptionIds.length > 1
+		) {
+			throw new AppError(
+				StatusCodes.BAD_REQUEST,
+				"This is a single-choice question — select only one option.",
+			);
 		}
 
 		selectedOptionIds = payload.selectedOptionIds;
 	} else if (problem.type === "CODING") {
 		if (!payload.code) {
-			throw new AppError(StatusCodes.BAD_REQUEST, "code is required for a CODING problem.");
+			throw new AppError(
+				StatusCodes.BAD_REQUEST,
+				"code is required for a CODING problem.",
+			);
 		}
 	} else if (!payload.answerText) {
-		throw new AppError(StatusCodes.BAD_REQUEST, "answerText is required for a WRITTEN problem.");
+		throw new AppError(
+			StatusCodes.BAD_REQUEST,
+			"answerText is required for a WRITTEN problem.",
+		);
 	}
 
 	const submission = await prisma.submission.upsert({
@@ -251,26 +322,37 @@ const saveSubmission = async (
 		update: {
 			status: "SUBMITTED",
 			submittedAt: new Date(),
-			...(problem.type === "CODING" && payload.code !== undefined && { code: payload.code }),
-			...(problem.type === "CODING" && payload.language !== undefined && { language: payload.language }),
-			...(problem.type === "WRITTEN" && payload.answerText !== undefined && { answerText: payload.answerText }),
+			...(problem.type === "CODING" &&
+				payload.code !== undefined && { code: payload.code }),
+			...(problem.type === "CODING" &&
+				payload.language !== undefined && { language: payload.language }),
+			...(problem.type === "WRITTEN" &&
+				payload.answerText !== undefined && { answerText: payload.answerText }),
 		},
 		create: {
 			attemptId,
 			problemId,
 			status: "SUBMITTED",
 			submittedAt: new Date(),
-			...(problem.type === "CODING" && payload.code !== undefined && { code: payload.code }),
-			...(problem.type === "CODING" && payload.language !== undefined && { language: payload.language }),
-			...(problem.type === "WRITTEN" && payload.answerText !== undefined && { answerText: payload.answerText }),
+			...(problem.type === "CODING" &&
+				payload.code !== undefined && { code: payload.code }),
+			...(problem.type === "CODING" &&
+				payload.language !== undefined && { language: payload.language }),
+			...(problem.type === "WRITTEN" &&
+				payload.answerText !== undefined && { answerText: payload.answerText }),
 		},
 	});
 
 	if (problem.type === "MCQ") {
 		await prisma.$transaction([
-			prisma.submissionAnswer.deleteMany({ where: { submissionId: submission.id } }),
+			prisma.submissionAnswer.deleteMany({
+				where: { submissionId: submission.id },
+			}),
 			prisma.submissionAnswer.createMany({
-				data: selectedOptionIds.map((optionId) => ({ submissionId: submission.id, optionId })),
+				data: selectedOptionIds.map((optionId) => ({
+					submissionId: submission.id,
+					optionId,
+				})),
 			}),
 		]);
 	}
@@ -282,14 +364,19 @@ const saveSubmission = async (
 };
 
 const submitAttempt = async (attemptId: string, candidateId: string) => {
-	const attempt = await prisma.assessmentAttempt.findFirst({ where: { id: attemptId, candidateId } });
+	const attempt = await prisma.assessmentAttempt.findFirst({
+		where: { id: attemptId, candidateId },
+	});
 
 	if (!attempt) {
 		throw new AppError(StatusCodes.NOT_FOUND, "Attempt not found.");
 	}
 
 	if (attempt.status !== "IN_PROGRESS") {
-		throw new AppError(StatusCodes.CONFLICT, `This attempt is already ${attempt.status.toLowerCase()}.`);
+		throw new AppError(
+			StatusCodes.CONFLICT,
+			`This attempt is already ${attempt.status.toLowerCase()}.`,
+		);
 	}
 
 	await finalizeAttempt(attemptId);
@@ -302,8 +389,14 @@ const submitAttempt = async (attemptId: string, candidateId: string) => {
  * firing right as time runs out) is not an error — it's just a no-op once
  * the attempt is no longer IN_PROGRESS.
  */
-const recordProctoringEvent = async (attemptId: string, candidateId: string, payload: ProctoringEventInput) => {
-	const attempt = await prisma.assessmentAttempt.findFirst({ where: { id: attemptId, candidateId } });
+const recordProctoringEvent = async (
+	attemptId: string,
+	candidateId: string,
+	payload: ProctoringEventInput,
+) => {
+	const attempt = await prisma.assessmentAttempt.findFirst({
+		where: { id: attemptId, candidateId },
+	});
 
 	if (!attempt) {
 		throw new AppError(StatusCodes.NOT_FOUND, "Attempt not found.");
@@ -316,7 +409,13 @@ const recordProctoringEvent = async (attemptId: string, candidateId: string, pay
 	if (payload.eventType === "TAB_SWITCH") {
 		await prisma.$transaction([
 			prisma.proctoringEvent.create({
-				data: { attemptId, eventType: payload.eventType, ...(payload.metadata && { metadata: payload.metadata as Prisma.InputJsonValue }) },
+				data: {
+					attemptId,
+					eventType: payload.eventType,
+					...(payload.metadata && {
+						metadata: payload.metadata as Prisma.InputJsonValue,
+					}),
+				},
 			}),
 			prisma.assessmentAttempt.update({
 				where: { id: attemptId },
@@ -325,17 +424,30 @@ const recordProctoringEvent = async (attemptId: string, candidateId: string, pay
 		]);
 	} else {
 		await prisma.proctoringEvent.create({
-			data: { attemptId, eventType: payload.eventType, ...(payload.metadata && { metadata: payload.metadata as Prisma.InputJsonValue }) },
+			data: {
+				attemptId,
+				eventType: payload.eventType,
+				...(payload.metadata && {
+					metadata: payload.metadata as Prisma.InputJsonValue,
+				}),
+			},
 		});
 	}
 
 	return { recorded: true };
 };
 
-const getProctoringEvents = async (attemptId: string, requester: { id: string; role: string; companyId?: string }) => {
+const getProctoringEvents = async (
+	attemptId: string,
+	requester: { id: string; role: string; companyId?: string },
+) => {
 	const attempt = await prisma.assessmentAttempt.findUnique({
 		where: { id: attemptId },
-		select: { id: true, candidateId: true, assessment: { select: { companyId: true } } },
+		select: {
+			id: true,
+			candidateId: true,
+			assessment: { select: { companyId: true } },
+		},
 	});
 
 	if (!attempt) {
@@ -344,10 +456,14 @@ const getProctoringEvents = async (attemptId: string, requester: { id: string; r
 
 	const isOwner = attempt.candidateId === requester.id;
 	const isOwningRecruiter =
-		requester.companyId !== undefined && attempt.assessment.companyId === requester.companyId;
+		requester.companyId !== undefined &&
+		attempt.assessment.companyId === requester.companyId;
 
 	if (requester.role !== "ADMIN" && !isOwner && !isOwningRecruiter) {
-		throw new AppError(StatusCodes.FORBIDDEN, "You don't have permission to view these proctoring events.");
+		throw new AppError(
+			StatusCodes.FORBIDDEN,
+			"You don't have permission to view these proctoring events.",
+		);
 	}
 
 	return prisma.proctoringEvent.findMany({
@@ -356,10 +472,18 @@ const getProctoringEvents = async (attemptId: string, requester: { id: string; r
 	});
 };
 
-const getProctoringEventById = async (attemptId: string, eventId: string, requester: { id: string; role: string; companyId?: string }) => {
+const getProctoringEventById = async (
+	attemptId: string,
+	eventId: string,
+	requester: { id: string; role: string; companyId?: string },
+) => {
 	const attempt = await prisma.assessmentAttempt.findUnique({
 		where: { id: attemptId },
-		select: { id: true, candidateId: true, assessment: { select: { companyId: true } } },
+		select: {
+			id: true,
+			candidateId: true,
+			assessment: { select: { companyId: true } },
+		},
 	});
 
 	if (!attempt) {
@@ -368,10 +492,14 @@ const getProctoringEventById = async (attemptId: string, eventId: string, reques
 
 	const isOwner = attempt.candidateId === requester.id;
 	const isOwningRecruiter =
-		requester.companyId !== undefined && attempt.assessment.companyId === requester.companyId;
+		requester.companyId !== undefined &&
+		attempt.assessment.companyId === requester.companyId;
 
 	if (requester.role !== "ADMIN" && !isOwner && !isOwningRecruiter) {
-		throw new AppError(StatusCodes.FORBIDDEN, "You don't have permission to view this proctoring event.");
+		throw new AppError(
+			StatusCodes.FORBIDDEN,
+			"You don't have permission to view this proctoring event.",
+		);
 	}
 
 	const event = await prisma.proctoringEvent.findFirst({

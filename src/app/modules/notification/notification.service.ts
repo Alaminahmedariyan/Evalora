@@ -36,32 +36,48 @@ const notificationQueryBuilder = new QueryBuilder<
 	defaultSortField: "createdAt",
 });
 
-const getMyNotifications = async (userId: string, query: Record<string, unknown>) => {
+const getMyNotifications = async (
+	userId: string,
+	query: Record<string, unknown>,
+) => {
 	return notificationQueryBuilder.execute(query, { userId });
 };
 
 const getUnreadCount = async (userId: string) => {
-	const unreadCount = await prisma.notification.count({ where: { userId, isRead: false } });
+	const unreadCount = await prisma.notification.count({
+		where: { userId, isRead: false },
+	});
 	return { unreadCount };
 };
 
 const markAsRead = async (id: string, userId: string) => {
-	const notification = await prisma.notification.findFirst({ where: { id, userId } });
+	const notification = await prisma.notification.findFirst({
+		where: { id, userId },
+	});
 
 	if (!notification) {
 		throw new AppError(StatusCodes.NOT_FOUND, "Notification not found.");
 	}
 
-	return prisma.notification.update({ where: { id }, data: { isRead: true }, select: NOTIFICATION_SELECT });
+	return prisma.notification.update({
+		where: { id },
+		data: { isRead: true },
+		select: NOTIFICATION_SELECT,
+	});
 };
 
 const markAllAsRead = async (userId: string) => {
-	const result = await prisma.notification.updateMany({ where: { userId, isRead: false }, data: { isRead: true } });
+	const result = await prisma.notification.updateMany({
+		where: { userId, isRead: false },
+		data: { isRead: true },
+	});
 	return { updated: result.count };
 };
 
 const deleteNotification = async (id: string, userId: string) => {
-	const notification = await prisma.notification.findFirst({ where: { id, userId } });
+	const notification = await prisma.notification.findFirst({
+		where: { id, userId },
+	});
 
 	if (!notification) {
 		throw new AppError(StatusCodes.NOT_FOUND, "Notification not found.");

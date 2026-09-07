@@ -13,7 +13,11 @@ const getResultByAttemptId = async (
 ) => {
 	const attempt = await prisma.assessmentAttempt.findUnique({
 		where: { id: attemptId },
-		select: { id: true, candidateId: true, assessment: { select: { companyId: true } } },
+		select: {
+			id: true,
+			candidateId: true,
+			assessment: { select: { companyId: true } },
+		},
 	});
 
 	if (!attempt) {
@@ -22,13 +26,20 @@ const getResultByAttemptId = async (
 
 	const isOwner = attempt.candidateId === requester.id;
 	const isOwningRecruiter =
-		requester.companyId !== undefined && attempt.assessment.companyId === requester.companyId;
+		requester.companyId !== undefined &&
+		attempt.assessment.companyId === requester.companyId;
 
 	if (requester.role !== "ADMIN" && !isOwner && !isOwningRecruiter) {
-		throw new AppError(StatusCodes.FORBIDDEN, "You don't have permission to view this result.");
+		throw new AppError(
+			StatusCodes.FORBIDDEN,
+			"You don't have permission to view this result.",
+		);
 	}
 
-	const result = await prisma.result.findUnique({ where: { attemptId }, select: RESULT_LEADERBOARD_SELECT });
+	const result = await prisma.result.findUnique({
+		where: { attemptId },
+		select: RESULT_LEADERBOARD_SELECT,
+	});
 
 	if (!result) {
 		throw new AppError(
@@ -41,9 +52,16 @@ const getResultByAttemptId = async (
 };
 
 /** `companyId` undefined means unscoped — ADMIN browsing any assessment's leaderboard. */
-const getResultsForAssessment = async (assessmentId: string, companyId: string | undefined) => {
+const getResultsForAssessment = async (
+	assessmentId: string,
+	companyId: string | undefined,
+) => {
 	const assessment = await prisma.assessment.findFirst({
-		where: { id: assessmentId, deletedAt: null, ...(companyId && { companyId }) },
+		where: {
+			id: assessmentId,
+			deletedAt: null,
+			...(companyId && { companyId }),
+		},
 	});
 
 	if (!assessment) {
@@ -81,11 +99,19 @@ const computeRanks = async (assessmentId: string, companyId: string) => {
 	});
 
 	if (finalizedResults.length === 0) {
-		throw new AppError(StatusCodes.BAD_REQUEST, "No fully-graded results to rank yet.");
+		throw new AppError(
+			StatusCodes.BAD_REQUEST,
+			"No fully-graded results to rank yet.",
+		);
 	}
 
 	await prisma.$transaction(
-		finalizedResults.map((result, index) => prisma.result.update({ where: { id: result.id }, data: { rank: index + 1 } })),
+		finalizedResults.map((result, index) =>
+			prisma.result.update({
+				where: { id: result.id },
+				data: { rank: index + 1 },
+			}),
+		),
 	);
 
 	return { ranked: finalizedResults.length };

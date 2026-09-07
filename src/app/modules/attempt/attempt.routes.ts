@@ -30,7 +30,11 @@ router.put(
 	attemptController.saveSubmission,
 );
 
-router.post("/:id/submit", requireRole("CANDIDATE"), attemptController.submitAttempt);
+router.post(
+	"/:id/submit",
+	requireRole("CANDIDATE"),
+	attemptController.submitAttempt,
+);
 
 router.post(
 	"/:id/proctoring-events",
@@ -41,6 +45,9 @@ router.post(
 
 router.get("/:id/proctoring-events", attemptController.getProctoringEvents);
 
-router.get("/proctoring-events/:eventId", attemptController.getProctoringEventById);
+router.get(
+	"/proctoring-events/:eventId",
+	attemptController.getProctoringEventById,
+);
 
 export const attemptRoutes = router;

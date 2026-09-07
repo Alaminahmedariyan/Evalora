@@ -8,12 +8,28 @@ export const DEFAULT_MAX_NESTED_DEPTH = 2;
 export const DEFAULT_MAX_SEARCH_LENGTH = 150;
 
 export const RESERVED_QUERY_KEYS = [
-	"page", "limit", "search", "sortBy", "sortOrder", "sort", "fields", "include",
+	"page",
+	"limit",
+	"search",
+	"sortBy",
+	"sortOrder",
+	"sort",
+	"fields",
+	"include",
 ] as const;
 
 export const OPERATOR_MAP: Record<string, string> = {
-	eq: "equals", not: "not", gt: "gt", gte: "gte", lt: "lt", lte: "lte",
-	in: "in", notIn: "notIn", contains: "contains", startsWith: "startsWith", endsWith: "endsWith",
+	eq: "equals",
+	not: "not",
+	gt: "gt",
+	gte: "gte",
+	lt: "lt",
+	lte: "lte",
+	in: "in",
+	notIn: "notIn",
+	contains: "contains",
+	startsWith: "startsWith",
+	endsWith: "endsWith",
 };
 
 export const VALID_OPERATORS = Object.keys(OPERATOR_MAP);

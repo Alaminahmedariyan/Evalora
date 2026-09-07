@@ -2,7 +2,6 @@ import { redis } from "../../lib/radis";
 
 import config from "../config";
 
-
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_SECONDS = 15 * 60;
 const ATTEMPT_WINDOW_SECONDS = 15 * 60;

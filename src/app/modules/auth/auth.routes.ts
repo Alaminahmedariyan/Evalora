@@ -28,17 +28,9 @@ router.post(
 );
 
 // Protected authentication routes
-router.post(
-	"/logout",
-	requireAuth,
-	authController.logout,
-);
+router.post("/logout", requireAuth, authController.logout);
 
-router.post(
-	"/refresh-token",
-	requireAuth,
-	authController.refreshToken,
-);
+router.post("/refresh-token", requireAuth, authController.refreshToken);
 
 // OTP routes
 router.post(
@@ -71,10 +63,6 @@ router.post(
 );
 
 // Current authenticated user
-router.get(
-	"/me",
-	requireAuth,
-	authController.getMe,
-);
+router.get("/me", requireAuth, authController.getMe);
 
 export const authRoutes = router;

@@ -17,7 +17,11 @@ const stripUnsafeKeys = (value: unknown): unknown => {
 	return value;
 };
 
-export const sanitizeBody = (req: Request, _res: Response, next: NextFunction) => {
+export const sanitizeBody = (
+	req: Request,
+	_res: Response,
+	next: NextFunction,
+) => {
 	if (req.body && typeof req.body === "object") {
 		req.body = stripUnsafeKeys(req.body);
 	}

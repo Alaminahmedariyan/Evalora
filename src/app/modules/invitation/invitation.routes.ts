@@ -24,16 +24,32 @@ router.get(
 );
 
 // Must be declared before "/:id" so "me" isn't swallowed as an :id value.
-router.get("/me", requireRole("CANDIDATE"), invitationController.getMyInvitations);
+router.get(
+	"/me",
+	requireRole("CANDIDATE"),
+	invitationController.getMyInvitations,
+);
 
 // Permission (owning recruiter / invited candidate / admin) is enforced
 // inside the service, since it depends on the invitation's own data.
 router.get("/:id", invitationController.getInvitationById);
 
-router.post("/:id/accept", requireRole("CANDIDATE"), invitationController.acceptInvitation);
+router.post(
+	"/:id/accept",
+	requireRole("CANDIDATE"),
+	invitationController.acceptInvitation,
+);
 
-router.post("/:id/decline", requireRole("CANDIDATE"), invitationController.declineInvitation);
+router.post(
+	"/:id/decline",
+	requireRole("CANDIDATE"),
+	invitationController.declineInvitation,
+);
 
-router.delete("/:id", requireRole("RECRUITER"), invitationController.cancelInvitation);
+router.delete(
+	"/:id",
+	requireRole("RECRUITER"),
+	invitationController.cancelInvitation,
+);
 
 export const invitationRoutes = router;

@@ -27,7 +27,13 @@ export const ASSESSMENT_DETAIL_SELECT = {
 			order: true,
 			marks: true,
 			problem: {
-				select: { id: true, title: true, type: true, difficulty: true, defaultMarks: true },
+				select: {
+					id: true,
+					title: true,
+					type: true,
+					difficulty: true,
+					defaultMarks: true,
+				},
 			},
 		},
 		orderBy: { order: "asc" },

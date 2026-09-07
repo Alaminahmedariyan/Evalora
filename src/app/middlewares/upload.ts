@@ -25,7 +25,11 @@ const DOCUMENT_MIME_TYPES = [
 	"text/csv",
 ];
 
-const makeUploader = (allowedMimeTypes: string[], maxSizeBytes: number, label: string) =>
+const makeUploader = (
+	allowedMimeTypes: string[],
+	maxSizeBytes: number,
+	label: string,
+) =>
 	multer({
 		storage,
 		limits: { fileSize: maxSizeBytes },
@@ -34,5 +38,13 @@ const makeUploader = (allowedMimeTypes: string[], maxSizeBytes: number, label: s
 		},
 	});
 
-export const imageUpload = makeUploader(IMAGE_MIME_TYPES, 5 * 1024 * 1024, "images");
-export const documentUpload = makeUploader([...IMAGE_MIME_TYPES, ...DOCUMENT_MIME_TYPES], 20 * 1024 * 1024, "documents");
+export const imageUpload = makeUploader(
+	IMAGE_MIME_TYPES,
+	5 * 1024 * 1024,
+	"images",
+);
+export const documentUpload = makeUploader(
+	[...IMAGE_MIME_TYPES, ...DOCUMENT_MIME_TYPES],
+	20 * 1024 * 1024,
+	"documents",
+);

@@ -16,7 +16,9 @@ const getDashboardStats = catchAsync(async (_req: Request, res: Response) => {
 });
 
 const getAuditLogs = catchAsync(async (req: Request, res: Response) => {
-	const result = await adminService.getAuditLogs(req.query as Record<string, unknown>);
+	const result = await adminService.getAuditLogs(
+		req.query as Record<string, unknown>,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,

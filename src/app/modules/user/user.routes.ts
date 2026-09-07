@@ -1,9 +1,6 @@
 import { Router } from "express";
 
-import {
-    requireAuth,
-    requireRole,
-} from "../../middlewares/requireAuth";
+import { requireAuth, requireRole } from "../../middlewares/requireAuth";
 import { imageUpload } from "../../middlewares/upload";
 import { validateRequest } from "../../middlewares/validateRequest";
 import { validateRequestWithFile } from "../../middlewares/validateRequest2";
@@ -18,42 +15,30 @@ router.use(requireAuth);
 router.get("/me", userController.getMyProfile);
 
 router.patch(
-    "/me",
-    imageUpload.single("image"),
-    validateRequestWithFile(userValidation.updateProfileSchema),
-    userController.updateMyProfile,
+	"/me",
+	imageUpload.single("image"),
+	validateRequestWithFile(userValidation.updateProfileSchema),
+	userController.updateMyProfile,
 );
 
-router.get(
-    "/",
-    requireRole("ADMIN"),
-    userController.getAllUsers,
-);
+router.get("/", requireRole("ADMIN"), userController.getAllUsers);
 
-router.get(
-    "/:id",
-    requireRole("ADMIN"),
-    userController.getUserById,
+router.get("/:id", requireRole("ADMIN"), userController.getUserById);
+
+router.patch(
+	"/:id/role",
+	requireRole("ADMIN"),
+	validateRequest(userValidation.updateRoleSchema),
+	userController.updateRole,
 );
 
 router.patch(
-    "/:id/role",
-    requireRole("ADMIN"),
-    validateRequest(userValidation.updateRoleSchema),
-    userController.updateRole,
+	"/:id/status",
+	requireRole("ADMIN"),
+	validateRequest(userValidation.updateStatusSchema),
+	userController.updateStatus,
 );
 
-router.patch(
-    "/:id/status",
-    requireRole("ADMIN"),
-    validateRequest(userValidation.updateStatusSchema),
-    userController.updateStatus,
-);
-
-router.delete(
-    "/:id",
-    requireRole("ADMIN"),
-    userController.deleteUser,
-);
+router.delete("/:id", requireRole("ADMIN"), userController.deleteUser);
 
 export const userRoutes = router;

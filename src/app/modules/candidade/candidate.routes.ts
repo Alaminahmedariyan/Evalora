@@ -10,7 +10,12 @@ import { candidateValidation } from "./candidate.validation";
 const router = Router();
 
 // Must come before "/:id" so "me" isn't swallowed as an :id value.
-router.get("/me", requireAuth, requireRole("CANDIDATE"), candidateController.getMyProfile);
+router.get(
+	"/me",
+	requireAuth,
+	requireRole("CANDIDATE"),
+	candidateController.getMyProfile,
+);
 
 router.patch(
 	"/me",
@@ -22,8 +27,18 @@ router.patch(
 );
 
 // Recruiter/Admin browsing — there is no public candidate directory.
-router.get("/", requireAuth, requireRole("RECRUITER", "ADMIN"), candidateController.getAllCandidates);
+router.get(
+	"/",
+	requireAuth,
+	requireRole("RECRUITER", "ADMIN"),
+	candidateController.getAllCandidates,
+);
 
-router.get("/:id", requireAuth, requireRole("RECRUITER", "ADMIN"), candidateController.getCandidateProfileById);
+router.get(
+	"/:id",
+	requireAuth,
+	requireRole("RECRUITER", "ADMIN"),
+	candidateController.getCandidateProfileById,
+);
 
 export const candidateRoutes = router;

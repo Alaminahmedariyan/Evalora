@@ -8,7 +8,9 @@ import { companyService } from "../company/company.service";
 import { invitationService } from "./invitation.service";
 
 /** ADMIN is unscoped; RECRUITER is always scoped to their own company. */
-const resolveScopeCompanyId = async (user: AuthenticatedUser): Promise<string | undefined> => {
+const resolveScopeCompanyId = async (
+	user: AuthenticatedUser,
+): Promise<string | undefined> => {
 	if (user.role === "ADMIN") return undefined;
 	const company = await companyService.getMyCompany(user.id);
 	return company.id;
@@ -31,28 +33,33 @@ const inviteCandidates = catchAsync(async (req: Request, res: Response) => {
 	});
 });
 
-const getInvitationsForAssessment = catchAsync(async (req: Request, res: Response) => {
-	const currentUser = req.user as AuthenticatedUser;
-	const companyId = await resolveScopeCompanyId(currentUser);
+const getInvitationsForAssessment = catchAsync(
+	async (req: Request, res: Response) => {
+		const currentUser = req.user as AuthenticatedUser;
+		const companyId = await resolveScopeCompanyId(currentUser);
 
-	const result = await invitationService.getInvitationsForAssessment(
-		req.params.assessmentId as string,
-		companyId,
-		req.query as Record<string, unknown>,
-	);
+		const result = await invitationService.getInvitationsForAssessment(
+			req.params.assessmentId as string,
+			companyId,
+			req.query as Record<string, unknown>,
+		);
 
-	res.status(StatusCodes.OK).json({
-		success: true,
-		message: "Invitations retrieved successfully.",
-		meta: result.meta,
-		data: result.data,
-	});
-});
+		res.status(StatusCodes.OK).json({
+			success: true,
+			message: "Invitations retrieved successfully.",
+			meta: result.meta,
+			data: result.data,
+		});
+	},
+);
 
 const getMyInvitations = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 
-	const invitations = await invitationService.getMyInvitations(currentUser.id, currentUser.email);
+	const invitations = await invitationService.getMyInvitations(
+		currentUser.id,
+		currentUser.email,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
@@ -65,12 +72,15 @@ const getInvitationById = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 	const companyId = await resolveScopeCompanyId(currentUser);
 
-	const invitation = await invitationService.getInvitationById(req.params.id as string, {
-		id: currentUser.id,
-		email: currentUser.email,
-		role: currentUser.role,
-		...(companyId !== undefined && { companyId }),
-	});
+	const invitation = await invitationService.getInvitationById(
+		req.params.id as string,
+		{
+			id: currentUser.id,
+			email: currentUser.email,
+			role: currentUser.role,
+			...(companyId !== undefined && { companyId }),
+		},
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
@@ -115,7 +125,10 @@ const cancelInvitation = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 	const company = await companyService.getMyCompany(currentUser.id);
 
-	const result = await invitationService.cancelInvitation(req.params.id as string, company.id);
+	const result = await invitationService.cancelInvitation(
+		req.params.id as string,
+		company.id,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,

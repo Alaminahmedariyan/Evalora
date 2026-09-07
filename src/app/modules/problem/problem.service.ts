@@ -9,7 +9,10 @@ import { QueryBuilder } from "../../queryBuilder";
 import { generateUniqueSlug } from "../../utils/generateUniqueSlug";
 
 import { PROBLEM_DETAIL_SELECT, PROBLEM_LIST_SELECT } from "./problem.const";
-import type { CreateProblemInput, UpdateProblemInput } from "./problem.interface";
+import type {
+	CreateProblemInput,
+	UpdateProblemInput,
+} from "./problem.interface";
 
 const problemQueryBuilder = new QueryBuilder<
 	Prisma.ProblemGetPayload<{ select: typeof PROBLEM_LIST_SELECT }>,
@@ -17,8 +20,14 @@ const problemQueryBuilder = new QueryBuilder<
 >(prisma.problem, {
 	searchableFields: ["title", "description"],
 	filterableFields: {
-		type: { type: "enum", enum: { MCQ: "MCQ", CODING: "CODING", WRITTEN: "WRITTEN" } },
-		difficulty: { type: "enum", enum: { EASY: "EASY", MEDIUM: "MEDIUM", HARD: "HARD" } },
+		type: {
+			type: "enum",
+			enum: { MCQ: "MCQ", CODING: "CODING", WRITTEN: "WRITTEN" },
+		},
+		difficulty: {
+			type: "enum",
+			enum: { EASY: "EASY", MEDIUM: "MEDIUM", HARD: "HARD" },
+		},
 		isPublic: "boolean",
 		createdAt: "date",
 	},
@@ -28,7 +37,11 @@ const problemQueryBuilder = new QueryBuilder<
 	defaultSortField: "createdAt",
 });
 
-const createProblem = async (companyId: string, createdById: string, payload: CreateProblemInput) => {
+const createProblem = async (
+	companyId: string,
+	createdById: string,
+	payload: CreateProblemInput,
+) => {
 	const slug = await generateUniqueSlug(payload.title, (candidate) =>
 		prisma.problem
 			.findUnique({ where: { companyId_slug: { companyId, slug: candidate } } })
@@ -54,7 +67,9 @@ const createProblem = async (companyId: string, createdById: string, payload: Cr
 				mcqProblem: {
 					create: {
 						type: payload.mcqType ?? "SINGLE_CHOICE",
-						...(payload.explanation !== undefined && { explanation: payload.explanation }),
+						...(payload.explanation !== undefined && {
+							explanation: payload.explanation,
+						}),
 						options: {
 							create: payload.options.map((option) => ({
 								optionText: option.optionText,
@@ -74,7 +89,9 @@ const createProblem = async (companyId: string, createdById: string, payload: Cr
 			data: {
 				...baseData,
 				type: "CODING",
-				...(payload.timeLimitSeconds !== undefined && { timeLimitSeconds: payload.timeLimitSeconds }),
+				...(payload.timeLimitSeconds !== undefined && {
+					timeLimitSeconds: payload.timeLimitSeconds,
+				}),
 				testCases: { create: payload.testCases },
 			},
 			select: PROBLEM_DETAIL_SELECT,
@@ -92,7 +109,10 @@ const createProblem = async (companyId: string, createdById: string, payload: Cr
  * browse every company's problem bank. RECRUITER always passes their own
  * companyId.
  */
-const getAllProblems = async (query: Record<string, unknown>, companyId?: string) => {
+const getAllProblems = async (
+	query: Record<string, unknown>,
+	companyId?: string,
+) => {
 	const tenantScope = companyId ? { companyId } : undefined;
 	return problemQueryBuilder.execute(query, tenantScope);
 };
@@ -127,8 +147,14 @@ const getProblemById = async (id: string, companyId?: string) => {
  *   so once any TestCaseResult exists for this problem, test cases become
  *   immutable and this throws a clear 409 instead of crashing on delete.
  */
-const updateProblem = async (id: string, companyId: string, payload: UpdateProblemInput) => {
-	const existing = await prisma.problem.findFirst({ where: { id, companyId, deletedAt: null } });
+const updateProblem = async (
+	id: string,
+	companyId: string,
+	payload: UpdateProblemInput,
+) => {
+	const existing = await prisma.problem.findFirst({
+		where: { id, companyId, deletedAt: null },
+	});
 
 	if (!existing) {
 		throw new AppError(StatusCodes.NOT_FOUND, "Problem not found.");
@@ -140,8 +166,13 @@ const updateProblem = async (id: string, companyId: string, payload: UpdateProbl
 		await prisma.problem.update({ where: { id }, data: topLevel });
 	}
 
-	if (existing.type === "MCQ" && (options || mcqType !== undefined || explanation !== undefined)) {
-		const mcqProblem = await prisma.mcqProblem.findUniqueOrThrow({ where: { problemId: id } });
+	if (
+		existing.type === "MCQ" &&
+		(options || mcqType !== undefined || explanation !== undefined)
+	) {
+		const mcqProblem = await prisma.mcqProblem.findUniqueOrThrow({
+			where: { problemId: id },
+		});
 
 		if (mcqType !== undefined || explanation !== undefined) {
 			await prisma.mcqProblem.update({
@@ -157,8 +188,16 @@ const updateProblem = async (id: string, companyId: string, payload: UpdateProbl
 			await prisma.$transaction(
 				options.map((option) =>
 					prisma.mcqOption.upsert({
-						where: { mcqProblemId_order: { mcqProblemId: mcqProblem.id, order: option.order } },
-						update: { optionText: option.optionText, isCorrect: option.isCorrect },
+						where: {
+							mcqProblemId_order: {
+								mcqProblemId: mcqProblem.id,
+								order: option.order,
+							},
+						},
+						update: {
+							optionText: option.optionText,
+							isCorrect: option.isCorrect,
+						},
 						create: { mcqProblemId: mcqProblem.id, ...option },
 					}),
 				),
@@ -179,7 +218,9 @@ const updateProblem = async (id: string, companyId: string, payload: UpdateProbl
 		}
 
 		await prisma.testCase.deleteMany({ where: { problemId: id } });
-		await prisma.testCase.createMany({ data: testCases.map((testCase) => ({ problemId: id, ...testCase })) });
+		await prisma.testCase.createMany({
+			data: testCases.map((testCase) => ({ problemId: id, ...testCase })),
+		});
 	}
 
 	return getProblemById(id, companyId);
@@ -191,7 +232,9 @@ const updateProblem = async (id: string, companyId: string, payload: UpdateProbl
  * assessment would silently change candidates' total marks mid-flight.
  */
 const softDeleteProblem = async (id: string, companyId: string) => {
-	const existing = await prisma.problem.findFirst({ where: { id, companyId, deletedAt: null } });
+	const existing = await prisma.problem.findFirst({
+		where: { id, companyId, deletedAt: null },
+	});
 
 	if (!existing) {
 		throw new AppError(StatusCodes.NOT_FOUND, "Problem not found.");
@@ -211,7 +254,10 @@ const softDeleteProblem = async (id: string, companyId: string) => {
 		);
 	}
 
-	await prisma.problem.update({ where: { id }, data: { deletedAt: new Date() } });
+	await prisma.problem.update({
+		where: { id },
+		data: { deletedAt: new Date() },
+	});
 
 	return { message: "Problem deleted successfully." };
 };

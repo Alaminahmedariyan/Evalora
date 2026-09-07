@@ -5,7 +5,11 @@ import type { z } from "zod";
 import AppError from "../errors/appError";
 
 export const validateRequest = (schema: z.ZodTypeAny) => {
-	return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
+	return async (
+		req: Request,
+		_res: Response,
+		next: NextFunction,
+	): Promise<void> => {
 		const result = await schema.safeParseAsync(req.body ?? {});
 
 		if (!result.success) {

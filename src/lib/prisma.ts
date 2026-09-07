@@ -1,6 +1,6 @@
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "../generated/prisma/client";
 import config from "../app/config";
+import { PrismaClient } from "../generated/prisma/client";
 
 // config.ts already loads and validates DATABASE_URL via dotenv/config + zod,
 // so we read it from there instead of process.env directly — this keeps a
@@ -12,5 +12,5 @@ const globalForPrisma = global as unknown as { prisma: PrismaClient };
 export const prisma = globalForPrisma.prisma || new PrismaClient({ adapter });
 
 if (config.app.env !== "production") {
-    globalForPrisma.prisma = prisma;
+	globalForPrisma.prisma = prisma;
 }

@@ -17,9 +17,17 @@ router.post(
 	assessmentController.createAssessment,
 );
 
-router.get("/", requireRole("RECRUITER", "ADMIN"), assessmentController.getAllAssessments);
+router.get(
+	"/",
+	requireRole("RECRUITER", "ADMIN"),
+	assessmentController.getAllAssessments,
+);
 
-router.get("/:id", requireRole("RECRUITER", "ADMIN"), assessmentController.getAssessmentById);
+router.get(
+	"/:id",
+	requireRole("RECRUITER", "ADMIN"),
+	assessmentController.getAssessmentById,
+);
 
 router.patch(
 	"/:id",
@@ -28,16 +36,42 @@ router.patch(
 	assessmentController.updateAssessment,
 );
 
-router.patch("/:id/publish", requireRole("RECRUITER"), assessmentController.publishAssessment);
+router.patch(
+	"/:id/publish",
+	requireRole("RECRUITER"),
+	assessmentController.publishAssessment,
+);
 
-router.patch("/:id/close", requireRole("RECRUITER"), assessmentController.closeAssessment);
+router.patch(
+	"/:id/close",
+	requireRole("RECRUITER"),
+	assessmentController.closeAssessment,
+);
 
-router.delete("/:id", requireRole("RECRUITER"), assessmentController.deleteAssessment);
+router.delete(
+	"/:id",
+	requireRole("RECRUITER"),
+	assessmentController.deleteAssessment,
+);
 
-router.post("/:id/versions", requireRole("RECRUITER"), validateRequest(assessmentValidation.createVersionSchema), assessmentController.createAssessmentVersion);
+router.post(
+	"/:id/versions",
+	requireRole("RECRUITER"),
+	validateRequest(assessmentValidation.createVersionSchema),
+	assessmentController.createAssessmentVersion,
+);
 
-router.get("/:id/versions", requireRole("RECRUITER", "ADMIN"), assessmentController.getAssessmentVersions);
+router.get(
+	"/:id/versions",
+	requireRole("RECRUITER", "ADMIN"),
+	assessmentController.getAssessmentVersions,
+);
 
-router.patch("/versions/:id/restore", requireRole("RECRUITER"), validateRequest(assessmentValidation.restoreVersionSchema), assessmentController.restoreAssessmentVersion);
+router.patch(
+	"/versions/:id/restore",
+	requireRole("RECRUITER"),
+	validateRequest(assessmentValidation.restoreVersionSchema),
+	assessmentController.restoreAssessmentVersion,
+);
 
 export const assessmentRoutes = router;

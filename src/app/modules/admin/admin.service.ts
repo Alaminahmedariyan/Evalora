@@ -30,8 +30,14 @@ type AuditLogResult = {
 	user: { id: string; name: string; email: string; role: UserRole } | null;
 };
 
-const auditLogQueryBuilder = new QueryBuilder<AuditLogResult, AuditLogWhereInput>(
-	prisma.auditLog as unknown as PrismaDelegate<AuditLogResult, AuditLogWhereInput>,
+const auditLogQueryBuilder = new QueryBuilder<
+	AuditLogResult,
+	AuditLogWhereInput
+>(
+	prisma.auditLog as unknown as PrismaDelegate<
+		AuditLogResult,
+		AuditLogWhereInput
+	>,
 	{
 		searchableFields: ["entity"],
 		filterableFields: {
@@ -86,32 +92,52 @@ const getDashboardStats = async () => {
 		paidRevenue,
 	] = await Promise.all([
 		prisma.user.count({ where: { deletedAt: null } }),
-		prisma.user.groupBy({ by: ["role"], where: { deletedAt: null }, _count: { _all: true } }),
+		prisma.user.groupBy({
+			by: ["role"],
+			where: { deletedAt: null },
+			_count: { _all: true },
+		}),
 		prisma.company.count({ where: { deletedAt: null } }),
 		prisma.company.count({ where: { deletedAt: null, isVerified: true } }),
 		prisma.problem.count({ where: { deletedAt: null } }),
 		prisma.assessment.count({ where: { deletedAt: null } }),
-		prisma.assessment.groupBy({ by: ["status"], where: { deletedAt: null }, _count: { _all: true } }),
+		prisma.assessment.groupBy({
+			by: ["status"],
+			where: { deletedAt: null },
+			_count: { _all: true },
+		}),
 		prisma.assessmentAttempt.count(),
-		prisma.assessmentAttempt.groupBy({ by: ["status"], _count: { _all: true } }),
+		prisma.assessmentAttempt.groupBy({
+			by: ["status"],
+			_count: { _all: true },
+		}),
 		prisma.payment.count({ where: { status: "PAID" } }),
-		prisma.payment.aggregate({ where: { status: "PAID" }, _sum: { amountMinor: true } }),
+		prisma.payment.aggregate({
+			where: { status: "PAID" },
+			_sum: { amountMinor: true },
+		}),
 	]);
 
 	return {
 		users: {
 			total: totalUsers,
-			byRole: Object.fromEntries(usersByRole.map((row) => [row.role, row._count._all])),
+			byRole: Object.fromEntries(
+				usersByRole.map((row) => [row.role, row._count._all]),
+			),
 		},
 		companies: { total: totalCompanies, verified: verifiedCompanies },
 		problems: { total: totalProblems },
 		assessments: {
 			total: totalAssessments,
-			byStatus: Object.fromEntries(assessmentsByStatus.map((row) => [row.status, row._count._all])),
+			byStatus: Object.fromEntries(
+				assessmentsByStatus.map((row) => [row.status, row._count._all]),
+			),
 		},
 		attempts: {
 			total: totalAttempts,
-			byStatus: Object.fromEntries(attemptsByStatus.map((row) => [row.status, row._count._all])),
+			byStatus: Object.fromEntries(
+				attemptsByStatus.map((row) => [row.status, row._count._all]),
+			),
 		},
 		payments: {
 			totalPaid: totalPaidPayments,

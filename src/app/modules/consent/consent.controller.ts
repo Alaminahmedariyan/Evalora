@@ -33,7 +33,10 @@ const updateConsent = catchAsync(async (req: Request, res: Response) => {
 const revokeConsent = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 
-	const consent = await consentService.revokeConsent(currentUser.id, req.params.consentType as string);
+	const consent = await consentService.revokeConsent(
+		currentUser.id,
+		req.params.consentType as string,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,

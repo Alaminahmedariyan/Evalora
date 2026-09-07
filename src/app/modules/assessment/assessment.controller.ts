@@ -8,7 +8,9 @@ import { companyService } from "../company/company.service";
 import { assessmentService } from "./assessment.service";
 
 /** ADMIN browses unscoped; RECRUITER is always scoped to their own company. */
-const resolveScopeCompanyId = async (user: AuthenticatedUser): Promise<string | undefined> => {
+const resolveScopeCompanyId = async (
+	user: AuthenticatedUser,
+): Promise<string | undefined> => {
 	if (user.role === "ADMIN") return undefined;
 	const company = await companyService.getMyCompany(user.id);
 	return company.id;
@@ -18,7 +20,11 @@ const createAssessment = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 	const company = await companyService.getMyCompany(currentUser.id);
 
-	const assessment = await assessmentService.createAssessment(company.id, currentUser.id, req.body);
+	const assessment = await assessmentService.createAssessment(
+		company.id,
+		currentUser.id,
+		req.body,
+	);
 
 	res.status(StatusCodes.CREATED).json({
 		success: true,
@@ -31,7 +37,10 @@ const getAllAssessments = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 	const companyId = await resolveScopeCompanyId(currentUser);
 
-	const result = await assessmentService.getAllAssessments(req.query as Record<string, unknown>, companyId);
+	const result = await assessmentService.getAllAssessments(
+		req.query as Record<string, unknown>,
+		companyId,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
@@ -45,7 +54,10 @@ const getAssessmentById = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 	const companyId = await resolveScopeCompanyId(currentUser);
 
-	const assessment = await assessmentService.getAssessmentById(req.params.id as string, companyId);
+	const assessment = await assessmentService.getAssessmentById(
+		req.params.id as string,
+		companyId,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
@@ -58,7 +70,11 @@ const updateAssessment = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 	const company = await companyService.getMyCompany(currentUser.id);
 
-	const assessment = await assessmentService.updateAssessment(req.params.id as string, company.id, req.body);
+	const assessment = await assessmentService.updateAssessment(
+		req.params.id as string,
+		company.id,
+		req.body,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
@@ -71,7 +87,10 @@ const publishAssessment = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 	const company = await companyService.getMyCompany(currentUser.id);
 
-	const assessment = await assessmentService.publishAssessment(req.params.id as string, company.id);
+	const assessment = await assessmentService.publishAssessment(
+		req.params.id as string,
+		company.id,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
@@ -84,7 +103,10 @@ const closeAssessment = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 	const company = await companyService.getMyCompany(currentUser.id);
 
-	const assessment = await assessmentService.closeAssessment(req.params.id as string, company.id);
+	const assessment = await assessmentService.closeAssessment(
+		req.params.id as string,
+		company.id,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
@@ -97,7 +119,10 @@ const deleteAssessment = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 	const company = await companyService.getMyCompany(currentUser.id);
 
-	const result = await assessmentService.softDeleteAssessment(req.params.id as string, company.id);
+	const result = await assessmentService.softDeleteAssessment(
+		req.params.id as string,
+		company.id,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
@@ -106,44 +131,60 @@ const deleteAssessment = catchAsync(async (req: Request, res: Response) => {
 	});
 });
 
-const createAssessmentVersion = catchAsync(async (req: Request, res: Response) => {
-	const currentUser = req.user as AuthenticatedUser;
-	const company = await companyService.getMyCompany(currentUser.id);
+const createAssessmentVersion = catchAsync(
+	async (req: Request, res: Response) => {
+		const currentUser = req.user as AuthenticatedUser;
+		const company = await companyService.getMyCompany(currentUser.id);
 
-	const assessment = await assessmentService.createAssessmentVersion(req.params.id as string, company.id);
+		const assessment = await assessmentService.createAssessmentVersion(
+			req.params.id as string,
+			company.id,
+		);
 
-	res.status(StatusCodes.CREATED).json({
-		success: true,
-		message: "New version created successfully.",
-		data: assessment,
-	});
-});
+		res.status(StatusCodes.CREATED).json({
+			success: true,
+			message: "New version created successfully.",
+			data: assessment,
+		});
+	},
+);
 
-const getAssessmentVersions = catchAsync(async (req: Request, res: Response) => {
-	const currentUser = req.user as AuthenticatedUser;
-	const companyId = await resolveScopeCompanyId(currentUser);
+const getAssessmentVersions = catchAsync(
+	async (req: Request, res: Response) => {
+		const currentUser = req.user as AuthenticatedUser;
+		const companyId = await resolveScopeCompanyId(currentUser);
 
-	const versions = await assessmentService.getAssessmentVersions(req.params.id as string, companyId);
+		const versions = await assessmentService.getAssessmentVersions(
+			req.params.id as string,
+			companyId,
+		);
 
-	res.status(StatusCodes.OK).json({
-		success: true,
-		message: "Assessment versions retrieved successfully.",
-		data: versions,
-	});
-});
+		res.status(StatusCodes.OK).json({
+			success: true,
+			message: "Assessment versions retrieved successfully.",
+			data: versions,
+		});
+	},
+);
 
-const restoreAssessmentVersion = catchAsync(async (req: Request, res: Response) => {
-	const currentUser = req.user as AuthenticatedUser;
-	const company = await companyService.getMyCompany(currentUser.id);
+const restoreAssessmentVersion = catchAsync(
+	async (req: Request, res: Response) => {
+		const currentUser = req.user as AuthenticatedUser;
+		const company = await companyService.getMyCompany(currentUser.id);
 
-	const assessment = await assessmentService.restoreAssessmentVersion(req.params.id as string, company.id);
+		const assessment = await assessmentService.restoreAssessmentVersion(
+			req.params.id as string,
+			company.id,
+		);
 
-	res.status(StatusCodes.OK).json({
-		success: true,
-		message: "Assessment version restored successfully. A new draft version has been created.",
-		data: assessment,
-	});
-});
+		res.status(StatusCodes.OK).json({
+			success: true,
+			message:
+				"Assessment version restored successfully. A new draft version has been created.",
+			data: assessment,
+		});
+	},
+);
 
 export const assessmentController = {
 	createAssessment,

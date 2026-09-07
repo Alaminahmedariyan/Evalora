@@ -8,7 +8,7 @@ class AppError extends Error {
 		statusCode: number,
 		message: string,
 		errorCode?: string,
-		details?: unknown
+		details?: unknown,
 	) {
 		super(message);
 

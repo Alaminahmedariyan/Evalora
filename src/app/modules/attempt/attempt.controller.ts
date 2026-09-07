@@ -8,7 +8,9 @@ import { companyService } from "../company/company.service";
 import { attemptService } from "./attempt.service";
 
 /** ADMIN is unscoped; RECRUITER is always scoped to their own company. */
-const resolveScopeCompanyId = async (user: AuthenticatedUser): Promise<string | undefined> => {
+const resolveScopeCompanyId = async (
+	user: AuthenticatedUser,
+): Promise<string | undefined> => {
 	if (user.role === "ADMIN") return undefined;
 	if (user.role !== "RECRUITER") return undefined;
 	const company = await companyService.getMyCompany(user.id);
@@ -18,7 +20,10 @@ const resolveScopeCompanyId = async (user: AuthenticatedUser): Promise<string | 
 const startAttempt = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 
-	const attempt = await attemptService.startAttempt(currentUser.id, req.body.assessmentId);
+	const attempt = await attemptService.startAttempt(
+		currentUser.id,
+		req.body.assessmentId,
+	);
 
 	res.status(StatusCodes.CREATED).json({
 		success: true,
@@ -76,7 +81,10 @@ const saveSubmission = catchAsync(async (req: Request, res: Response) => {
 const submitAttempt = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 
-	const attempt = await attemptService.submitAttempt(req.params.id as string, currentUser.id);
+	const attempt = await attemptService.submitAttempt(
+		req.params.id as string,
+		currentUser.id,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
@@ -85,31 +93,38 @@ const submitAttempt = catchAsync(async (req: Request, res: Response) => {
 	});
 });
 
-const recordProctoringEvent = catchAsync(async (req: Request, res: Response) => {
-	const currentUser = req.user as AuthenticatedUser;
+const recordProctoringEvent = catchAsync(
+	async (req: Request, res: Response) => {
+		const currentUser = req.user as AuthenticatedUser;
 
-	const result = await attemptService.recordProctoringEvent(
-		req.params.id as string,
-		currentUser.id,
-		req.body,
-	);
+		const result = await attemptService.recordProctoringEvent(
+			req.params.id as string,
+			currentUser.id,
+			req.body,
+		);
 
-	res.status(StatusCodes.OK).json({
-		success: true,
-		message: result.recorded ? "Event recorded." : "Attempt is no longer active; event ignored.",
-		data: result,
-	});
-});
+		res.status(StatusCodes.OK).json({
+			success: true,
+			message: result.recorded
+				? "Event recorded."
+				: "Attempt is no longer active; event ignored.",
+			data: result,
+		});
+	},
+);
 
 const getProctoringEvents = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 	const companyId = await resolveScopeCompanyId(currentUser);
 
-	const events = await attemptService.getProctoringEvents(req.params.id as string, {
-		id: currentUser.id,
-		role: currentUser.role,
-		...(companyId !== undefined && { companyId }),
-	});
+	const events = await attemptService.getProctoringEvents(
+		req.params.id as string,
+		{
+			id: currentUser.id,
+			role: currentUser.role,
+			...(companyId !== undefined && { companyId }),
+		},
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
@@ -118,22 +133,28 @@ const getProctoringEvents = catchAsync(async (req: Request, res: Response) => {
 	});
 });
 
-const getProctoringEventById = catchAsync(async (req: Request, res: Response) => {
-	const currentUser = req.user as AuthenticatedUser;
-	const companyId = await resolveScopeCompanyId(currentUser);
+const getProctoringEventById = catchAsync(
+	async (req: Request, res: Response) => {
+		const currentUser = req.user as AuthenticatedUser;
+		const companyId = await resolveScopeCompanyId(currentUser);
 
-	const event = await attemptService.getProctoringEventById(req.params.id as string, req.params.eventId as string, {
-		id: currentUser.id,
-		role: currentUser.role,
-		...(companyId !== undefined && { companyId }),
-	});
+		const event = await attemptService.getProctoringEventById(
+			req.params.id as string,
+			req.params.eventId as string,
+			{
+				id: currentUser.id,
+				role: currentUser.role,
+				...(companyId !== undefined && { companyId }),
+			},
+		);
 
-	res.status(StatusCodes.OK).json({
-		success: true,
-		message: "Proctoring event retrieved successfully.",
-		data: event,
-	});
-});
+		res.status(StatusCodes.OK).json({
+			success: true,
+			message: "Proctoring event retrieved successfully.",
+			data: event,
+		});
+	},
+);
 
 export const attemptController = {
 	startAttempt,

@@ -20,8 +20,14 @@ const saveSubmissionSchema = z
 		answerText: z.string().trim().max(20000).optional(),
 	})
 	.refine(
-		(data) => data.selectedOptionIds !== undefined || data.code !== undefined || data.answerText !== undefined,
-		{ message: "Provide an answer: selectedOptionIds (MCQ), code (CODING), or answerText (WRITTEN)." },
+		(data) =>
+			data.selectedOptionIds !== undefined ||
+			data.code !== undefined ||
+			data.answerText !== undefined,
+		{
+			message:
+				"Provide an answer: selectedOptionIds (MCQ), code (CODING), or answerText (WRITTEN).",
+		},
 	);
 
 const testCaseResultInputSchema = z.object({
@@ -62,5 +68,5 @@ export const attemptValidation = {
 	startAttemptSchema,
 	saveSubmissionSchema,
 	manualEvaluationSchema,
-	proctoringEventSchema, 
+	proctoringEventSchema,
 };

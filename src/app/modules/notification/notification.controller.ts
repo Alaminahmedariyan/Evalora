@@ -9,7 +9,10 @@ import { notificationService } from "./notification.service";
 const getMyNotifications = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 
-	const result = await notificationService.getMyNotifications(currentUser.id, req.query as Record<string, unknown>);
+	const result = await notificationService.getMyNotifications(
+		currentUser.id,
+		req.query as Record<string, unknown>,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
@@ -34,7 +37,10 @@ const getUnreadCount = catchAsync(async (req: Request, res: Response) => {
 const markAsRead = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 
-	const notification = await notificationService.markAsRead(req.params.id as string, currentUser.id);
+	const notification = await notificationService.markAsRead(
+		req.params.id as string,
+		currentUser.id,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,
@@ -58,7 +64,10 @@ const markAllAsRead = catchAsync(async (req: Request, res: Response) => {
 const deleteNotification = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 
-	const result = await notificationService.deleteNotification(req.params.id as string, currentUser.id);
+	const result = await notificationService.deleteNotification(
+		req.params.id as string,
+		currentUser.id,
+	);
 
 	res.status(StatusCodes.OK).json({
 		success: true,

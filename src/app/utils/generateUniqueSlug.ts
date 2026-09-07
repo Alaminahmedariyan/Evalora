@@ -36,7 +36,9 @@ export const generateUniqueSlug = async (
 		suffix += 1;
 
 		if (suffix > 1000) {
-			throw new Error(`Could not generate a unique slug for "${source}" after 1000 attempts.`);
+			throw new Error(
+				`Could not generate a unique slug for "${source}" after 1000 attempts.`,
+			);
 		}
 	}
 

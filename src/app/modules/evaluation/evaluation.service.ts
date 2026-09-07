@@ -10,13 +10,23 @@ import { recomputeResult } from "../attempt/grading.util";
 
 type Requester = { id: string; role: UserRole; companyId?: string };
 
-const assertCanGrade = (requesterCompanyId: string | undefined, submissionCompanyId: string, role: UserRole) => {
+const assertCanGrade = (
+	requesterCompanyId: string | undefined,
+	submissionCompanyId: string,
+	role: UserRole,
+) => {
 	if (role !== "ADMIN" && requesterCompanyId !== submissionCompanyId) {
-		throw new AppError(StatusCodes.FORBIDDEN, "You don't have permission to access this submission.");
+		throw new AppError(
+			StatusCodes.FORBIDDEN,
+			"You don't have permission to access this submission.",
+		);
 	}
 };
 
-const getSubmissionsForAttempt = async (attemptId: string, requester: Requester) => {
+const getSubmissionsForAttempt = async (
+	attemptId: string,
+	requester: Requester,
+) => {
 	const attempt = await prisma.assessmentAttempt.findUnique({
 		where: { id: attemptId },
 		select: { id: true, assessment: { select: { companyId: true } } },
@@ -26,7 +36,11 @@ const getSubmissionsForAttempt = async (attemptId: string, requester: Requester)
 		throw new AppError(StatusCodes.NOT_FOUND, "Attempt not found.");
 	}
 
-	assertCanGrade(requester.companyId, attempt.assessment.companyId, requester.role);
+	assertCanGrade(
+		requester.companyId,
+		attempt.assessment.companyId,
+		requester.role,
+	);
 
 	return prisma.submission.findMany({
 		where: { attemptId },
@@ -36,7 +50,10 @@ const getSubmissionsForAttempt = async (attemptId: string, requester: Requester)
 };
 
 const getSubmissionById = async (id: string, requester: Requester) => {
-	const submission = await prisma.submission.findUnique({ where: { id }, select: SUBMISSION_GRADING_SELECT });
+	const submission = await prisma.submission.findUnique({
+		where: { id },
+		select: SUBMISSION_GRADING_SELECT,
+	});
 
 	if (!submission) {
 		throw new AppError(StatusCodes.NOT_FOUND, "Submission not found.");
@@ -47,7 +64,11 @@ const getSubmissionById = async (id: string, requester: Requester) => {
 		select: { assessment: { select: { companyId: true } } },
 	});
 
-	assertCanGrade(requester.companyId, attempt.assessment.companyId, requester.role);
+	assertCanGrade(
+		requester.companyId,
+		attempt.assessment.companyId,
+		requester.role,
+	);
 
 	return submission;
 };
@@ -56,8 +77,13 @@ const getSubmissionById = async (id: string, requester: Requester) => {
  * Grading queue for an assessment — every submission still waiting on a
  * human (CODING/WRITTEN with a real answer), across all candidates.
  */
-const getPendingEvaluations = async (assessmentId: string, companyId: string) => {
-	const assessment = await prisma.assessment.findFirst({ where: { id: assessmentId, companyId, deletedAt: null } });
+const getPendingEvaluations = async (
+	assessmentId: string,
+	companyId: string,
+) => {
+	const assessment = await prisma.assessment.findFirst({
+		where: { id: assessmentId, companyId, deletedAt: null },
+	});
 
 	if (!assessment) {
 		throw new AppError(StatusCodes.NOT_FOUND, "Assessment not found.");
@@ -94,7 +120,10 @@ const evaluateSubmission = async (
 					id: true,
 					status: true,
 					assessment: {
-						select: { companyId: true, assessmentProblems: { select: { problemId: true, marks: true } } },
+						select: {
+							companyId: true,
+							assessmentProblems: { select: { problemId: true, marks: true } },
+						},
 					},
 				},
 			},
@@ -105,10 +134,20 @@ const evaluateSubmission = async (
 		throw new AppError(StatusCodes.NOT_FOUND, "Submission not found.");
 	}
 
-	assertCanGrade(companyId, submission.attempt.assessment.companyId, "RECRUITER");
+	assertCanGrade(
+		companyId,
+		submission.attempt.assessment.companyId,
+		"RECRUITER",
+	);
 
-	if (submission.attempt.status === "NOT_STARTED" || submission.attempt.status === "IN_PROGRESS") {
-		throw new AppError(StatusCodes.CONFLICT, "This attempt hasn't been submitted yet.");
+	if (
+		submission.attempt.status === "NOT_STARTED" ||
+		submission.attempt.status === "IN_PROGRESS"
+	) {
+		throw new AppError(
+			StatusCodes.CONFLICT,
+			"This attempt hasn't been submitted yet.",
+		);
 	}
 
 	if (submission.problem.type === "MCQ") {
@@ -118,37 +157,53 @@ const evaluateSubmission = async (
 		);
 	}
 
-	const assessmentProblem = submission.attempt.assessment.assessmentProblems.find(
-		(ap) => ap.problemId === submission.problemId,
-	);
+	const assessmentProblem =
+		submission.attempt.assessment.assessmentProblems.find(
+			(ap) => ap.problemId === submission.problemId,
+		);
 	const maxScore = assessmentProblem?.marks ?? submission.problem.defaultMarks;
 
 	if (payload.score > maxScore) {
-		throw new AppError(StatusCodes.BAD_REQUEST, `Score cannot exceed the maximum marks for this problem (${maxScore}).`);
+		throw new AppError(
+			StatusCodes.BAD_REQUEST,
+			`Score cannot exceed the maximum marks for this problem (${maxScore}).`,
+		);
 	}
 
 	await prisma.$transaction(async (tx) => {
 		if (submission.problem.type === "CODING" && payload.testCaseResults) {
 			for (const testCaseResult of payload.testCaseResults) {
 				await tx.testCaseResult.upsert({
-					where: { submissionId_testCaseId: { submissionId: id, testCaseId: testCaseResult.testCaseId } },
+					where: {
+						submissionId_testCaseId: {
+							submissionId: id,
+							testCaseId: testCaseResult.testCaseId,
+						},
+					},
 					update: {
 						passed: testCaseResult.passed,
-						...(testCaseResult.actualOutput !== undefined && { actualOutput: testCaseResult.actualOutput }),
+						...(testCaseResult.actualOutput !== undefined && {
+							actualOutput: testCaseResult.actualOutput,
+						}),
 						points: testCaseResult.points ?? 0,
 					},
 					create: {
 						submissionId: id,
 						testCaseId: testCaseResult.testCaseId,
 						passed: testCaseResult.passed,
-						...(testCaseResult.actualOutput !== undefined && { actualOutput: testCaseResult.actualOutput }),
+						...(testCaseResult.actualOutput !== undefined && {
+							actualOutput: testCaseResult.actualOutput,
+						}),
 						points: testCaseResult.points ?? 0,
 					},
 				});
 			}
 		}
 
-		await tx.submission.update({ where: { id }, data: { status: "EVALUATED" } });
+		await tx.submission.update({
+			where: { id },
+			data: { status: "EVALUATED" },
+		});
 
 		await tx.submissionEvaluation.upsert({
 			where: { submissionId: id },
@@ -176,7 +231,10 @@ const evaluateSubmission = async (
 
 	await recomputeResult(submission.attempt.id);
 
-	return prisma.submission.findUniqueOrThrow({ where: { id }, select: SUBMISSION_GRADING_SELECT });
+	return prisma.submission.findUniqueOrThrow({
+		where: { id },
+		select: SUBMISSION_GRADING_SELECT,
+	});
 };
 
 export const evaluationService = {

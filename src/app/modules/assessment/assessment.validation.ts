@@ -7,7 +7,11 @@ const assessmentProblemSchema = z.object({
 });
 
 const baseAssessmentFields = {
-	title: z.string().trim().min(3, "Title must be at least 3 characters.").max(200),
+	title: z
+		.string()
+		.trim()
+		.min(3, "Title must be at least 3 characters.")
+		.max(200),
 	description: z.string().trim().max(5000).optional(),
 	instructions: z.string().trim().max(5000).optional(),
 	durationMinutes: z.coerce
@@ -27,7 +31,9 @@ const baseAssessmentFields = {
 
 const validateProblemsInvariants = (
 	data: {
-		problems?: { problemId: string; order: number; marks: number }[] | undefined;
+		problems?:
+			| { problemId: string; order: number; marks: number }[]
+			| undefined;
 		totalMarks?: number | undefined;
 	},
 	ctx: z.RefinementCtx,
@@ -36,16 +42,27 @@ const validateProblemsInvariants = (
 
 	const orders = data.problems.map((problem) => problem.order);
 	if (new Set(orders).size !== orders.length) {
-		ctx.addIssue({ code: "custom", message: "Problem order values must be unique.", path: ["problems"] });
+		ctx.addIssue({
+			code: "custom",
+			message: "Problem order values must be unique.",
+			path: ["problems"],
+		});
 	}
 
 	const problemIds = data.problems.map((problem) => problem.problemId);
 	if (new Set(problemIds).size !== problemIds.length) {
-		ctx.addIssue({ code: "custom", message: "The same problem cannot be added twice.", path: ["problems"] });
+		ctx.addIssue({
+			code: "custom",
+			message: "The same problem cannot be added twice.",
+			path: ["problems"],
+		});
 	}
 
 	if (data.totalMarks !== undefined) {
-		const marksSum = data.problems.reduce((sum, problem) => sum + problem.marks, 0);
+		const marksSum = data.problems.reduce(
+			(sum, problem) => sum + problem.marks,
+			0,
+		);
 		if (marksSum !== data.totalMarks) {
 			ctx.addIssue({
 				code: "custom",
@@ -59,7 +76,9 @@ const validateProblemsInvariants = (
 export const createAssessmentSchema = z
 	.object({
 		...baseAssessmentFields,
-		problems: z.array(assessmentProblemSchema).min(1, "Add at least one problem."),
+		problems: z
+			.array(assessmentProblemSchema)
+			.min(1, "Add at least one problem."),
 	})
 	.superRefine((data, ctx) => {
 		if (data.passingMarks > data.totalMarks) {
@@ -71,7 +90,11 @@ export const createAssessmentSchema = z
 		}
 
 		if (data.startAt && data.endAt && data.endAt <= data.startAt) {
-			ctx.addIssue({ code: "custom", message: "endAt must be after startAt.", path: ["endAt"] });
+			ctx.addIssue({
+				code: "custom",
+				message: "endAt must be after startAt.",
+				path: ["endAt"],
+			});
 		}
 
 		validateProblemsInvariants(data, ctx);
@@ -97,10 +120,17 @@ export const updateAssessmentSchema = z
 		shuffleQuestions: z.boolean().optional(),
 		showResultImmediately: z.boolean().optional(),
 		allowReview: z.boolean().optional(),
-		problems: z.array(assessmentProblemSchema).min(1, "Add at least one problem.").optional(),
+		problems: z
+			.array(assessmentProblemSchema)
+			.min(1, "Add at least one problem.")
+			.optional(),
 	})
 	.superRefine((data, ctx) => {
-		if (data.passingMarks !== undefined && data.totalMarks !== undefined && data.passingMarks > data.totalMarks) {
+		if (
+			data.passingMarks !== undefined &&
+			data.totalMarks !== undefined &&
+			data.passingMarks > data.totalMarks
+		) {
 			ctx.addIssue({
 				code: "custom",
 				message: "Passing marks cannot exceed total marks.",
@@ -109,7 +139,11 @@ export const updateAssessmentSchema = z
 		}
 
 		if (data.startAt && data.endAt && data.endAt <= data.startAt) {
-			ctx.addIssue({ code: "custom", message: "endAt must be after startAt.", path: ["endAt"] });
+			ctx.addIssue({
+				code: "custom",
+				message: "endAt must be after startAt.",
+				path: ["endAt"],
+			});
 		}
 
 		validateProblemsInvariants(data, ctx);

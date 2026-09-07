@@ -28,8 +28,12 @@ export const sendEmail = async ({ to, subject, html }: SendEmailInput) => {
 		console.error("[Email] Failed to send email:", error);
 
 		if (config.app.env !== "production") {
-			console.log("[Email] Hint: In Resend test mode, only verified domains can receive emails. Verify your domain at https://resend.com/domains");
-			console.log("[Email] The OTP is logged above — use it directly for testing.");
+			console.log(
+				"[Email] Hint: In Resend test mode, only verified domains can receive emails. Verify your domain at https://resend.com/domains",
+			);
+			console.log(
+				"[Email] The OTP is logged above — use it directly for testing.",
+			);
 		}
 	}
 };
