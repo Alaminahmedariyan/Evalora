@@ -241,6 +241,65 @@ const softDeleteCompany = async (id: string, actorId: string, actorRole: UserRol
 	return { message: "Company deleted successfully." };
 };
 
+const getMySubscription = async (userId: string) => {
+	const company = await prisma.company.findFirst({
+		where: { ownerId: userId, deletedAt: null },
+		include: { subscription: true },
+	});
+
+	if (!company) {
+		throw new AppError(StatusCodes.NOT_FOUND, "You don't have a registered company yet.");
+	}
+
+	return company.subscription ?? { message: "No active subscription." };
+};
+
+const updateMySubscription = async (userId: string, plan: "FREE" | "PRO" | "ENTERPRISE") => {
+	const company = await prisma.company.findFirst({
+		where: { ownerId: userId, deletedAt: null },
+	});
+
+	if (!company) {
+		throw new AppError(StatusCodes.NOT_FOUND, "You don't have a registered company yet.");
+	}
+
+	const periodEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+	const subscription = await prisma.subscription.upsert({
+		where: { companyId: company.id },
+		update: { plan, status: "ACTIVE", currentPeriodStart: new Date(), currentPeriodEnd: periodEnd, cancelAtPeriodEnd: false },
+		create: { companyId: company.id, plan, status: "ACTIVE", currentPeriodStart: new Date(), currentPeriodEnd: periodEnd },
+	});
+
+	return subscription;
+};
+
+const cancelMySubscription = async (userId: string) => {
+	const company = await prisma.company.findFirst({
+		where: { ownerId: userId, deletedAt: null },
+		include: { subscription: true },
+	});
+
+	if (!company) {
+		throw new AppError(StatusCodes.NOT_FOUND, "You don't have a registered company yet.");
+	}
+
+	if (!company.subscription) {
+		throw new AppError(StatusCodes.NOT_FOUND, "No active subscription to cancel.");
+	}
+
+	if (company.subscription.status === "CANCELLED" || company.subscription.status === "EXPIRED") {
+		throw new AppError(StatusCodes.CONFLICT, "Subscription is already cancelled or expired.");
+	}
+
+	const updated = await prisma.subscription.update({
+		where: { companyId: company.id },
+		data: { status: "CANCELLED", cancelledAt: new Date(), cancelAtPeriodEnd: true },
+	});
+
+	return updated;
+};
+
 export const companyService = {
 	registerCompany,
 	getAllCompanies,
@@ -249,4 +308,7 @@ export const companyService = {
 	updateMyCompany,
 	verifyCompany,
 	softDeleteCompany,
+	getMySubscription,
+	updateMySubscription,
+	cancelMySubscription,
 };

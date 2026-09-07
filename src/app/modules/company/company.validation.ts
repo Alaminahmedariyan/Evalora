@@ -51,4 +51,9 @@ const updateCompanySchema = z.object({
 export const companyValidation = {
 	registerCompanySchema,
 	updateCompanySchema,
+	updateSubscriptionSchema: z.object({
+		plan: z.enum(["FREE", "PRO", "ENTERPRISE"], {
+			message: "Plan must be one of FREE, PRO, or ENTERPRISE.",
+		}),
+	}),
 };

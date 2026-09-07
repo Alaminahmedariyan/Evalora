@@ -101,6 +101,40 @@ const recordProctoringEvent = catchAsync(async (req: Request, res: Response) => 
 	});
 });
 
+const getProctoringEvents = catchAsync(async (req: Request, res: Response) => {
+	const currentUser = req.user as AuthenticatedUser;
+	const companyId = await resolveScopeCompanyId(currentUser);
+
+	const events = await attemptService.getProctoringEvents(req.params.id as string, {
+		id: currentUser.id,
+		role: currentUser.role,
+		...(companyId !== undefined && { companyId }),
+	});
+
+	res.status(StatusCodes.OK).json({
+		success: true,
+		message: "Proctoring events retrieved successfully.",
+		data: events,
+	});
+});
+
+const getProctoringEventById = catchAsync(async (req: Request, res: Response) => {
+	const currentUser = req.user as AuthenticatedUser;
+	const companyId = await resolveScopeCompanyId(currentUser);
+
+	const event = await attemptService.getProctoringEventById(req.params.id as string, req.params.eventId as string, {
+		id: currentUser.id,
+		role: currentUser.role,
+		...(companyId !== undefined && { companyId }),
+	});
+
+	res.status(StatusCodes.OK).json({
+		success: true,
+		message: "Proctoring event retrieved successfully.",
+		data: event,
+	});
+});
+
 export const attemptController = {
 	startAttempt,
 	getMyAttempts,
@@ -108,4 +142,6 @@ export const attemptController = {
 	saveSubmission,
 	submitAttempt,
 	recordProctoringEvent,
+	getProctoringEvents,
+	getProctoringEventById,
 };

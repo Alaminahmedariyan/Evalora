@@ -13,6 +13,7 @@ import { paymentRoutes } from "../modules/payment/payment.routes";
 import { notificationRoutes } from "../modules/notification/notification.routes";
 import { adminRoutes } from "../modules/admin/admin.routes";
 import { candidateRoutes } from "../modules/candidade/candidate.routes";
+import { consentRoutes } from "../modules/consent/consent.routes";
 
 const router = Router();
 
@@ -30,6 +31,7 @@ const moduleRoutes = [
 	{ path: "/payments", route: paymentRoutes },
 	{ path: "/notifications", route: notificationRoutes },
 	{ path: "/admin", route: adminRoutes },
+	{ path: "/consents", route: consentRoutes },
 ];
 
 for (const { path, route } of moduleRoutes) {

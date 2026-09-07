@@ -39,4 +39,8 @@ router.post(
 	attemptController.recordProctoringEvent,
 );
 
+router.get("/:id/proctoring-events", attemptController.getProctoringEvents);
+
+router.get("/proctoring-events/:eventId", attemptController.getProctoringEventById);
+
 export const attemptRoutes = router;

@@ -5,7 +5,7 @@ import { bearer, emailOTP, twoFactor } from "better-auth/plugins";
 
 import config from "../app/config";
 import { otpEmailTemplate, welcomeEmailTemplate } from "../app/utils/emailTemplates";
-import { sendEmail } from "../app/utils/sendEmail";
+import { sendEmailSmtp } from "../app/utils/sendEmailSmtp";
 import { clearFailedAttempts, isLocked, recordFailedAttempt } from "../app/utils/bruteForceGuard";
 import { verifyCaptcha } from "../app/utils/verifyCaptcha";
 import { prisma } from "./prisma";
@@ -31,6 +31,10 @@ const trustedOrigins = [
 	"http://127.0.0.1:3000",
 	...config.app.clientUrl.split(",").map((origin) => origin.trim()).filter(Boolean),
 ].filter((origin, index, origins) => origins.indexOf(origin) === index);
+
+if (config.app.env !== "production") {
+	trustedOrigins.push("null");
+}
 
 export const auth = betterAuth({
 	database: prismaAdapter(prisma, { provider: "postgresql" }),
@@ -85,71 +89,72 @@ export const auth = betterAuth({
 
 		emailOTP({
 			otpLength: 6,
-			expiresIn: 5 * 60,
+			expiresIn: config.app.env === "production" ? 5 * 60 : 60 * 60,
 			allowedAttempts: 5,
 			overrideDefaultEmailVerification: true,
 
-			sendVerificationOTP: async ({ email, otp, type }) => {
-				const user = await prisma.user.findUnique({ where: { email } });
-				const name = user?.name ?? "there";
+		sendVerificationOTP: async ({ email, otp, type }) => {
+			const user = await prisma.user.findUnique({ where: { email } });
+			const name = user?.name ?? "there";
 
-				const subjectAndPurpose =
-					type === "sign-in"
-						? { subject: "Your sign-in code", purpose: "sign in" }
-						: type === "email-verification"
-							? { subject: "Verify your email", purpose: "verify your email" }
-							: { subject: "Reset your password", purpose: "reset your password" };
+			const subjectAndPurpose =
+				type === "sign-in"
+					? { subject: "Your sign-in code", purpose: "sign in" }
+					: type === "email-verification"
+						? { subject: "Verify your email", purpose: "verify your email" }
+						: { subject: "Reset your password", purpose: "reset your password" };
 
-				await sendEmail({
-					to: email,
-					subject: subjectAndPurpose.subject,
-					html: otpEmailTemplate(name, otp, 5, subjectAndPurpose.purpose),
-				});
-			},
+			if (config.app.env !== "production") {
+				console.log(`[Email OTP] ${subjectAndPurpose.purpose} code for ${email}: ${otp}`);
+			}
+
+			await sendEmailSmtp({
+				to: email,
+				subject: subjectAndPurpose.subject,
+				html: otpEmailTemplate(name, otp, 5, subjectAndPurpose.purpose),
+			});
+		},
 		}),
 	],
 
 	// --------------------------------------------------------------
 	// Request lifecycle hooks — brute-force lockout + optional captcha
 	// --------------------------------------------------------------
-	hooks: {
-		before: createAuthMiddleware(async (ctx) => {
-			if (ctx.path === "/sign-in/email") {
-				const email = ctx.body?.email as string | undefined;
-				if (email && (await isLocked(email))) {
-					throw new APIError("TOO_MANY_REQUESTS", {
-						message: "Too many failed login attempts. Please try again in 15 minutes.",
-					});
-				}
-			}
+hooks: {
+        before: createAuthMiddleware(async (ctx) => {
+            if (ctx.path === "/sign-in/email") {
+                const email = ctx.body?.email as string | undefined;
+                if (email && (await isLocked(email))) {
+                    throw new APIError("TOO_MANY_REQUESTS", {
+                        message: "Too many failed login attempts. Please try again in 15 minutes.",
+                    });
+                }
+            }
 
-			if (ctx.path === "/sign-up/email") {
-				const captchaToken = ctx.body?.captchaToken as string | undefined;
-				if (config.captcha.hcaptchaSecretKey) {
-					if (!captchaToken) {
-						throw new APIError("BAD_REQUEST", { message: "Captcha token is required." });
-					}
-					await verifyCaptcha(captchaToken);
-				}
-			}
-		}),
+            if (ctx.path === "/sign-up/email") {
+                const captchaToken = ctx.body?.captchaToken as string | undefined;
+                if (config.captcha.hcaptchaSecretKey && captchaToken) {
+                    await verifyCaptcha(captchaToken);
+                }
+            }
+        }),
 
-		after: createAuthMiddleware(async (ctx) => {
-			if (ctx.path === "/sign-in/email") {
-				const email = ctx.body?.email as string | undefined;
-				const returned = ctx.context.returned as { status?: number } | undefined;
-				const failed = Boolean(returned && typeof returned === "object" && "status" in returned && (returned.status ?? 0) >= 400);
+        after: createAuthMiddleware(async (ctx) => {
+            if (ctx.path === "/sign-in/email") {
+                const email = ctx.body?.email as string | undefined;
+                const returned = ctx.context.returned as { status?: number } | undefined;
+                const failed = Boolean(returned && typeof returned === "object" && "status" in returned && (returned.status ?? 0) >= 400);
 
-				if (email) {
-					if (failed) {
-						await recordFailedAttempt(email);
-					} else {
-						await clearFailedAttempts(email);
-					}
-				}
-			}
-		}),
-	},
+                if (email) {
+                    if (failed) {
+                        await recordFailedAttempt(email);
+                    } else {
+                        await clearFailedAttempts(email);
+                    }
+                }
+            }
+        }),
+    },
 
 	// --------------------------------------------------------------
 	// Database hooks — fires for BOTH credential signup and OAuth
@@ -159,7 +164,7 @@ export const auth = betterAuth({
 		user: {
 			create: {
 				after: async (user) => {
-					await sendEmail({
+					await sendEmailSmtp({
 						to: user.email,
 						subject: `Welcome, ${user.name}!`,
 						html: welcomeEmailTemplate(user.name),

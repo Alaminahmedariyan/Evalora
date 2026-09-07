@@ -34,4 +34,10 @@ router.patch("/:id/close", requireRole("RECRUITER"), assessmentController.closeA
 
 router.delete("/:id", requireRole("RECRUITER"), assessmentController.deleteAssessment);
 
+router.post("/:id/versions", requireRole("RECRUITER"), validateRequest(assessmentValidation.createVersionSchema), assessmentController.createAssessmentVersion);
+
+router.get("/:id/versions", requireRole("RECRUITER", "ADMIN"), assessmentController.getAssessmentVersions);
+
+router.patch("/versions/:id/restore", requireRole("RECRUITER"), validateRequest(assessmentValidation.restoreVersionSchema), assessmentController.restoreAssessmentVersion);
+
 export const assessmentRoutes = router;

@@ -54,12 +54,31 @@ app.use("/api/auth/sign-up", authRateLimiter);
 app.use("/api/auth/forget-password", authRateLimiter);
 app.use("/api/auth/email-otp", authRateLimiter);
 
+if (config.app.env !== "production") {
+	app.use("/api/auth", (req: Request, _res: Response, next: NextFunction) => {
+		if (!req.headers.origin) {
+			req.headers.origin = "http://localhost:3000";
+		}
+		next();
+	});
+}
+
 app.all("/api/auth/*splat", toNodeHandler(auth));
 
 app.use(express.json({ limit: "10mb" }));
 app.use(sanitizeBody);
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(cookieParser());
+
+app.use((_req, res, next) => {
+	const originalJson = res.json.bind(res);
+	res.json = (body) => {
+		const json = JSON.stringify(body, (_key, value) => (typeof value === "bigint" ? Number(value) : value));
+		res.setHeader("Content-Type", "application/json");
+		return res.send(json);
+	};
+	next();
+});
 
 app.get("/", (_req: Request, res: Response) => {
 	res.status(200).json({ success: true, message: "Evalora API is running." });

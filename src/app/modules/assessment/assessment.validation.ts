@@ -118,4 +118,6 @@ export const updateAssessmentSchema = z
 export const assessmentValidation = {
 	createAssessmentSchema,
 	updateAssessmentSchema,
+	createVersionSchema: z.object({}),
+	restoreVersionSchema: z.object({}),
 };

@@ -105,6 +105,42 @@ const deleteCompany = catchAsync(async (req: Request, res: Response) => {
 	});
 });
 
+const getMySubscription = catchAsync(async (req: Request, res: Response) => {
+	const currentUser = req.user as AuthenticatedUser;
+
+	const subscription = await companyService.getMySubscription(currentUser.id);
+
+	res.status(StatusCodes.OK).json({
+		success: true,
+		message: "Subscription retrieved successfully.",
+		data: subscription,
+	});
+});
+
+const updateMySubscription = catchAsync(async (req: Request, res: Response) => {
+	const currentUser = req.user as AuthenticatedUser;
+
+	const subscription = await companyService.updateMySubscription(currentUser.id, req.body.plan);
+
+	res.status(StatusCodes.OK).json({
+		success: true,
+		message: "Subscription updated successfully.",
+		data: subscription,
+	});
+});
+
+const cancelMySubscription = catchAsync(async (req: Request, res: Response) => {
+	const currentUser = req.user as AuthenticatedUser;
+
+	const subscription = await companyService.cancelMySubscription(currentUser.id);
+
+	res.status(StatusCodes.OK).json({
+		success: true,
+		message: "Subscription cancelled successfully. It will remain active until the end of the current period.",
+		data: subscription,
+	});
+});
+
 export const companyController = {
 	registerCompany,
 	getAllCompanies,
@@ -113,4 +149,7 @@ export const companyController = {
 	updateMyCompany,
 	verifyCompany,
 	deleteCompany,
+	getMySubscription,
+	updateMySubscription,
+	cancelMySubscription,
 };

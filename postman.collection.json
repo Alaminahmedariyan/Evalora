@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Developer Assessment Platform API",
-    "description": "End-to-end Postman collection for the Developer Assessment & Coding Platform (B7A6 backend assignment). Folders are ordered to be run top-to-bottom with Postman's Collection Runner: Auth -> Users -> Company -> Candidate -> Problem -> Assessment -> Invitation -> Attempt -> Evaluation -> Result -> Payment -> Notification -> Admin -> Error Demos -> Wrap-up.\n\nUses Bearer-token auth (captured automatically from the `set-auth-token` response header on login \u2014 see collection variables) rather than cookies, so it works identically whether Postman's cookie jar is enabled or not, and so three roles (Admin / Recruiter / Candidate) can be active side by side without clobbering each other's session.\n\nBefore running: set adminEmail/adminPassword to your SUPER_ADMIN_EMAIL/PASSWORD, and confirm candidate1/candidate2 credentials match your seed.ts demo accounts.",
+    "description": "End-to-end Postman collection for the Developer Assessment & Coding Platform (B7A6 backend assignment). Folders are ordered to be run top-to-bottom with Postman's Collection Runner: Auth -> Users -> Company -> Candidate -> Problem -> Assessment -> Invitation -> Attempt -> Evaluation -> Result -> Payment -> Notification -> Admin -> Error Demos -> Wrap-up.\n\nUses Bearer-token auth (captured automatically from the `set-auth-token` response header on login — see collection variables) rather than cookies, so it works identically whether Postman's cookie jar is enabled or not, and so three roles (Admin / Recruiter / Candidate) can be active side by side without clobbering each other's session.\n\nBefore running: set adminEmail/adminPassword to your SUPER_ADMIN_EMAIL/PASSWORD, and confirm candidate1/candidate2 credentials match your seed.ts demo accounts.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -194,10 +194,10 @@
                 "register"
               ]
             },
-            "description": "Creates a brand-new CANDIDATE account (role is server-assigned, cannot be set by the client). Uses a timestamped email so this is safely re-runnable.",
+            "description": "Creates a brand-new CANDIDATE account (role is server-assigned, cannot be set by the client). Uses a timestamped email so this is safely re-runnable. If hCaptcha is enabled on the server, add a valid token to the `captchaToken` variable below or leave HCAPTCHA_SECRET_KEY empty in .env to skip captcha for demo runs.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Postman Demo Candidate\",\n  \"email\": \"postman.demo.{{$timestamp}}@example.com\",\n  \"password\": \"Demo@12345\"\n}",
+              "raw": "{\n  \"name\": \"Alamin Ahmed Ariyan\",\n  \"email\": \"{{candidate1Email}}\",\n  \"password\": \"{{candidate1Password}}\",\n  \"captchaToken\": \"{{captchaToken}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -216,7 +216,121 @@
                 ]
               }
             }
+          ],
+          "description": "Registers the candidate user with email verification. Uses candidate1Email from environment."
+        },
+        {
+          "name": "Register Recruiter",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Registers the recruiter user. Role will be CANDIDATE by default — admin will update it to RECRUITER later.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Farhan Ahmed\",\n  \"email\": \"{{candidate2Email}}\",\n  \"password\": \"{{candidate2Password}}\",\n  \"captchaToken\": \"{{captchaToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "pm.test('Status is 201', () => pm.response.to.have.status(201));",
+                    "const json = pm.response.json();",
+                    "if (json.data && json.data.user) pm.collectionVariables.set('recruiterUserId', json.data.user.id);"
+                  ]
+                }
+              }
+            ]
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 201', () => pm.response.to.have.status(201));",
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.user) {",
+                  "  pm.collectionVariables.set('recruiterUserId', json.data.user.id);",
+                  "  console.log('Recruiter user ID:', json.data.user.id);",
+                  "}"
+                ]
+              }
+            }
           ]
+        },
+        {
+          "name": "Update Recruiter Role to RECRUITER",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{recruiterUserId}}/role",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{recruiterUserId}}",
+                "role"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"RECRUITER\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                  ]
+                }
+              }
+            ]
+          },
+          "response": []
         },
         {
           "name": "Login - Admin",
@@ -239,7 +353,6 @@
                 "login"
               ]
             },
-            "description": "Fill adminEmail/adminPassword collection variables with your SUPER_ADMIN_EMAIL / SUPER_ADMIN_PASSWORD from .env before running.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{adminPassword}}\"\n}",
@@ -248,25 +361,25 @@
                   "language": "json"
                 }
               }
-            }
-          },
-          "response": [],
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
-                  "const token = pm.response.headers.get('set-auth-token');",
-                  "if (token) pm.collectionVariables.set('adminToken', token);"
-                ]
+            },
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                    "const token = pm.response.headers.get('set-auth-token');",
+                    "if (token) pm.collectionVariables.set('adminToken', token);"
+                  ]
+                }
               }
-            }
-          ]
+            ]
+          },
+          "response": []
         },
         {
-          "name": "Login - Recruiter-to-be (seeded candidate2)",
+          "name": "Login - Recruiter",
           "request": {
             "method": "POST",
             "header": [
@@ -286,7 +399,6 @@
                 "login"
               ]
             },
-            "description": "This seeded CANDIDATE will register a company later in this collection, which promotes them to RECRUITER. Kept as its own token throughout so later requests don't need to re-login.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"email\": \"{{candidate2Email}}\",\n  \"password\": \"{{candidate2Password}}\"\n}",
@@ -295,22 +407,22 @@
                   "language": "json"
                 }
               }
-            }
-          },
-          "response": [],
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
-                  "const token = pm.response.headers.get('set-auth-token');",
-                  "if (token) pm.collectionVariables.set('recruiterToken', token);"
-                ]
+            },
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                    "const token = pm.response.headers.get('set-auth-token');",
+                    "if (token) pm.collectionVariables.set('recruiterToken', token);"
+                  ]
+                }
               }
-            }
-          ]
+            ]
+          },
+          "response": []
         },
         {
           "name": "Login - Candidate",
@@ -333,7 +445,6 @@
                 "login"
               ]
             },
-            "description": "This is the candidate seeded with a completed, graded attempt already in the DB (see seed.ts) \u2014 useful for GET endpoints even before you run the live attempt flow below.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"email\": \"{{candidate1Email}}\",\n  \"password\": \"{{candidate1Password}}\"\n}",
@@ -342,24 +453,24 @@
                   "language": "json"
                 }
               }
-            }
-          },
-          "response": [],
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
-                  "const token = pm.response.headers.get('set-auth-token');",
-                  "if (token) pm.collectionVariables.set('candidateToken', token);",
-                  "const json = pm.response.json();",
-                  "if (json.data && json.data.user) pm.collectionVariables.set('candidateUserId', json.data.user.id);"
-                ]
+            },
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                    "const token = pm.response.headers.get('set-auth-token');",
+                    "if (token) pm.collectionVariables.set('candidateToken', token);",
+                    "const json = pm.response.json();",
+                    "if (json.data && json.data.user) pm.collectionVariables.set('candidateUserId', json.data.user.id);"
+                  ]
+                }
               }
-            }
-          ]
+            ]
+          },
+          "response": []
         },
         {
           "name": "Get Current User (Candidate)",
@@ -412,7 +523,7 @@
           "response": []
         },
         {
-          "name": "OTP / Password (reference only \u2014 needs real email delivery)",
+          "name": "OTP / Password (reference only — needs real email delivery)",
           "item": [
             {
               "name": "Send Email OTP",
@@ -435,7 +546,6 @@
                     "send-otp"
                   ]
                 },
-                "description": "",
                 "body": {
                   "mode": "raw",
                   "raw": "{\n  \"email\": \"{{candidate1Email}}\",\n  \"type\": \"email-verification\"\n}",
@@ -444,7 +554,18 @@
                       "language": "json"
                     }
                   }
-                }
+                },
+                "event": [
+                  {
+                    "listen": "test",
+                    "script": {
+                      "type": "text/javascript",
+                      "exec": [
+                        "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                      ]
+                    }
+                  }
+                ]
               },
               "response": []
             },
@@ -472,7 +593,7 @@
                 "description": "",
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"email\": \"{{candidate1Email}}\",\n  \"otp\": \"123456\"\n}",
+                  "raw": "{\n  \"email\": \"{{candidate1Email}}\",\n  \"otp\": \"{{otpCode}}\"\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -506,7 +627,7 @@
                 "description": "",
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"email\": \"{{candidate1Email}}\",\n  \"otp\": \"123456\",\n  \"newPassword\": \"NewPass@123\"\n}",
+                  "raw": "{\n  \"email\": \"{{candidate1Email}}\",\n  \"otp\": \"{{otpCode}}\",\n  \"newPassword\": \"NewPass@123\"\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -556,7 +677,7 @@
               "response": []
             }
           ],
-          "description": "These require a real OTP code delivered by email. With Resend in sandbox mode (see .env), delivery is restricted to your own verified address \u2014 kept here for API-documentation completeness, not part of the runnable chain."
+          "description": "These require a real OTP code delivered by email. With Resend in sandbox mode (see .env), delivery is restricted to your own verified address — kept here for API-documentation completeness, not part of the runnable chain."
         }
       ],
       "description": ""
@@ -648,7 +769,7 @@
                 "me"
               ]
             },
-            "description": "multipart/form-data \u2014 add an 'image' file field to test the avatar-upload path.",
+            "description": "multipart/form-data — add an 'image' file field to test the avatar-upload path.",
             "body": {
               "mode": "urlencoded",
               "urlencoded": [
@@ -693,7 +814,7 @@
           "response": []
         },
         {
-          "name": "Update User Role (Admin) \u2014 CAUTION",
+          "name": "Update User Role (Admin) — CAUTION",
           "request": {
             "method": "PATCH",
             "header": [
@@ -719,7 +840,7 @@
                 "role"
               ]
             },
-            "description": "Fill someOtherUserId with a throwaway user's id before running \u2014 do not point this at a seeded demo account you still need in its original role. Also blocked from targeting your own account (self-lockout guard).",
+            "description": "Fill someOtherUserId with a throwaway user's id before running — do not point this at a seeded demo account you still need in its original role. Also blocked from targeting your own account (self-lockout guard).",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"role\": \"RECRUITER\"\n}",
@@ -733,7 +854,7 @@
           "response": []
         },
         {
-          "name": "Update User Status (Admin) \u2014 CAUTION",
+          "name": "Update User Status (Admin) — CAUTION",
           "request": {
             "method": "PATCH",
             "header": [
@@ -773,7 +894,7 @@
           "response": []
         },
         {
-          "name": "Delete User (Admin) \u2014 CAUTION",
+          "name": "Delete User (Admin) — CAUTION",
           "request": {
             "method": "DELETE",
             "header": [
@@ -793,7 +914,7 @@
                 "{{someOtherUserId}}"
               ]
             },
-            "description": "Soft delete. Same caution as above \u2014 don't run against an account you still need."
+            "description": "Soft delete. Same caution as above — don't run against an account you still need."
           },
           "response": []
         }
@@ -901,7 +1022,7 @@
                 "me"
               ]
             },
-            "description": "multipart/form-data \u2014 add a 'logo' file field in Postman's Body tab to test the Cloudinary upload path; this raw collection can't attach a binary file for you.",
+            "description": "multipart/form-data — add a 'logo' file field in Postman's Body tab to test the Cloudinary upload path; this raw collection can't attach a binary file for you.",
             "body": {
               "mode": "urlencoded",
               "urlencoded": [
@@ -1002,6 +1123,129 @@
               }
             }
           ]
+        },
+        {
+          "name": "Get My Subscription",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{recruiterToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/companies/me/subscription",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "companies",
+                "me",
+                "subscription"
+              ]
+            },
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                  ]
+                }
+              }
+            ]
+          },
+          "response": []
+        },
+        {
+          "name": "Update My Subscription (upgrade to PRO)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{recruiterToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/companies/me/subscription",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "companies",
+                "me",
+                "subscription"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"plan\": \"PRO\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                  ]
+                }
+              }
+            ]
+          },
+          "response": []
+        },
+        {
+          "name": "Cancel My Subscription",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{recruiterToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/companies/me/subscription/cancel",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "companies",
+                "me",
+                "subscription",
+                "cancel"
+              ]
+            },
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                  ]
+                }
+              }
+            ]
+          },
+          "response": []
         }
       ],
       "description": ""
@@ -1009,6 +1253,59 @@
     {
       "name": "4. Candidate Profile",
       "item": [
+        {
+          "name": "Update My Profile",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{candidateToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/candidates/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "candidates",
+                "me"
+              ]
+            },
+            "description": "multipart/form-data — add a 'resume' file field to test the resume-upload path.",
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "headline",
+                  "value": "Updated via Postman",
+                  "type": "text"
+                },
+                {
+                  "key": "location",
+                  "value": "Dhaka, Bangladesh",
+                  "type": "text"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "if (json.data) pm.collectionVariables.set('candidateProfileId', json.data.id);"
+                ]
+              }
+            }
+          ]
+        },
         {
           "name": "Get My Profile",
           "request": {
@@ -1039,53 +1336,11 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
-                  "const json = pm.response.json();",
-                  "if (json.data) pm.collectionVariables.set('candidateProfileId', json.data.id);"
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));"
                 ]
               }
             }
           ]
-        },
-        {
-          "name": "Update My Profile",
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{candidateToken}}",
-                "type": "text"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/candidates/me",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "candidates",
-                "me"
-              ]
-            },
-            "description": "multipart/form-data \u2014 add a 'resume' file field to test the resume-upload path.",
-            "body": {
-              "mode": "urlencoded",
-              "urlencoded": [
-                {
-                  "key": "headline",
-                  "value": "Updated via Postman",
-                  "type": "text"
-                },
-                {
-                  "key": "location",
-                  "value": "Dhaka, Bangladesh",
-                  "type": "text"
-                }
-              ]
-            }
-          },
-          "response": []
         },
         {
           "name": "Get All Candidates (Recruiter, paginated + search)",
@@ -1145,6 +1400,90 @@
             "description": ""
           },
           "response": []
+        },
+        {
+          "name": "Get My Consents",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{candidateToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/consents/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "consents",
+                "me"
+              ]
+            },
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                  ]
+                }
+              }
+            ]
+          },
+          "response": []
+        },
+        {
+          "name": "Update My Consent (Marketing)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{candidateToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/consents/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "consents",
+                "me"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"consentType\": \"MARKETING\",\n  \"granted\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                  ]
+                }
+              }
+            ]
+          },
+          "response": []
         }
       ],
       "description": ""
@@ -1177,7 +1516,7 @@
                 "problems"
               ]
             },
-            "description": "Captures the correct option's id for later use in the Attempt flow \u2014 legitimate because this is the recruiter's own detail view (which is allowed to see isCorrect); the candidate-facing attempt view never exposes it.",
+            "description": "Captures the correct option's id for later use in the Attempt flow — legitimate because this is the recruiter's own detail view (which is allowed to see isCorrect); the candidate-facing attempt view never exposes it.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"title\": \"JavaScript Closures\",\n  \"description\": \"Which statement best describes a closure in JavaScript?\",\n  \"type\": \"MCQ\",\n  \"difficulty\": \"MEDIUM\",\n  \"defaultMarks\": 5,\n  \"mcqType\": \"SINGLE_CHOICE\",\n  \"explanation\": \"A closure is formed when an inner function retains access to its outer function's scope after the outer function has returned.\",\n  \"options\": [\n    {\n      \"optionText\": \"A function bundled with references to its surrounding lexical scope.\",\n      \"isCorrect\": true,\n      \"order\": 1\n    },\n    {\n      \"optionText\": \"A way to permanently freeze an object.\",\n      \"isCorrect\": false,\n      \"order\": 2\n    },\n    {\n      \"optionText\": \"A built-in loop construct.\",\n      \"isCorrect\": false,\n      \"order\": 3\n    },\n    {\n      \"optionText\": \"A CSS layout technique.\",\n      \"isCorrect\": false,\n      \"order\": 4\n    }\n  ]\n}",
@@ -1446,7 +1785,7 @@
                 "assessments"
               ]
             },
-            "description": "marks (5+10+10) must equal totalMarks (25) \u2014 this is enforced server-side, not just in this example.",
+            "description": "marks (5+10+10) must equal totalMarks (25) — this is enforced server-side, not just in this example.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"title\": \"Junior Full-Stack Developer Assessment (Postman)\",\n  \"description\": \"Screening assessment created live through this Postman collection.\",\n  \"instructions\": \"You have 60 minutes. Do not switch tabs.\",\n  \"durationMinutes\": 60,\n  \"totalMarks\": 25,\n  \"passingMarks\": 15,\n  \"maxAttempts\": 1,\n  \"problems\": [\n    {\n      \"problemId\": \"{{mcqProblemId}}\",\n      \"order\": 1,\n      \"marks\": 5\n    },\n    {\n      \"problemId\": \"{{codingProblemId}}\",\n      \"order\": 2,\n      \"marks\": 10\n    },\n    {\n      \"problemId\": \"{{writtenProblemId}}\",\n      \"order\": 3,\n      \"marks\": 10\n    }\n  ]\n}",
@@ -1572,6 +1911,121 @@
               }
             }
           ]
+        },
+        {
+          "name": "Create New Version",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{recruiterToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/assessments/{{assessmentId}}/versions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "assessments",
+                "{{assessmentId}}",
+                "versions"
+              ]
+            },
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "pm.test('Status is 201', () => pm.response.to.have.status(201));",
+                    "const json = pm.response.json();",
+                    "if (json.data) pm.collectionVariables.set('assessmentVersionId', json.data.id);"
+                  ]
+                }
+              }
+            ]
+          },
+          "response": []
+        },
+        {
+          "name": "List Assessment Versions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{recruiterToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/assessments/{{assessmentId}}/versions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "assessments",
+                "{{assessmentId}}",
+                "versions"
+              ]
+            },
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                  ]
+                }
+              }
+            ]
+          },
+          "response": []
+        },
+        {
+          "name": "Restore Previous Version",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{recruiterToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/versions/{{assessmentVersionId}}/restore",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "versions",
+                "{{assessmentVersionId}}",
+                "restore"
+              ]
+            },
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                  ]
+                }
+              }
+            ]
+          },
+          "response": []
         }
       ],
       "description": ""
@@ -1735,6 +2189,42 @@
               }
             }
           ]
+        },
+        {
+          "name": "Decline Invitation (Candidate)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{candidateToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/invitations/{{invitationId}}/decline",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "invitations",
+                "{{invitationId}}",
+                "decline"
+              ]
+            },
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                  ]
+                }
+              }
+            ]
+          },
+          "response": []
         }
       ],
       "description": ""
@@ -2078,6 +2568,42 @@
               }
             }
           ]
+        },
+        {
+          "name": "Get Proctoring Events (Recruiter)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{recruiterToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/attempts/{{attemptId}}/proctoring-events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "attempts",
+                "{{attemptId}}",
+                "proctoring-events"
+              ]
+            },
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                  ]
+                }
+              }
+            ]
+          },
+          "response": []
         }
       ],
       "description": ""
@@ -2284,6 +2810,43 @@
               }
             }
           ]
+        },
+        {
+          "name": "Get Pending Evaluations (Recruiter)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{recruiterToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/evaluations/assessments/{{assessmentId}}/pending",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "evaluations",
+                "assessments",
+                "{{assessmentId}}",
+                "pending"
+              ]
+            },
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                  ]
+                }
+              }
+            ]
+          },
+          "response": []
         }
       ],
       "description": ""
@@ -2331,7 +2894,7 @@
           ]
         },
         {
-          "name": "Get Results For Assessment (Recruiter \u2014 leaderboard)",
+          "name": "Get Results For Assessment (Recruiter — leaderboard)",
           "request": {
             "method": "GET",
             "header": [
@@ -2382,6 +2945,78 @@
             "description": ""
           },
           "response": []
+        },
+        {
+          "name": "Get Result By Attempt Id",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{candidateToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/results/attempts/{{attemptId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "results",
+                "attempts",
+                "{{attemptId}}"
+              ]
+            },
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                  ]
+                }
+              }
+            ]
+          },
+          "response": []
+        },
+        {
+          "name": "Get Results For Assessment (Recruiter)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{recruiterToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/results/assessments/{{assessmentId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "results",
+                "assessments",
+                "{{assessmentId}}"
+              ]
+            },
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                  ]
+                }
+              }
+            ]
+          },
+          "response": []
         }
       ],
       "description": ""
@@ -2390,7 +3025,7 @@
       "name": "11. Payment",
       "item": [
         {
-          "name": "Create Checkout Session (Recruiter \u2014 upgrade to PRO)",
+          "name": "Create Checkout Session (Recruiter — upgrade to PRO)",
           "request": {
             "method": "POST",
             "header": [
@@ -2548,9 +3183,9 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{ \"note\": \"Stripe signs this body \u2014 it cannot be hand-constructed in Postman.\" }"
+              "raw": "{ \"note\": \"Stripe signs this body — it cannot be hand-constructed in Postman.\" }"
             },
-            "description": "This endpoint requires a valid Stripe signature over the raw request body, which only Stripe (or the Stripe CLI) can produce. To exercise it locally:\n\n  stripe listen --forward-to localhost:5000/api/v1/webhooks/stripe\n\nthen complete a checkout session above using Stripe's test card. Do not send this request from Postman as-is \u2014 it will fail signature verification by design (that's the security control working correctly)."
+            "description": "This endpoint requires a valid Stripe signature over the raw request body, which only Stripe (or the Stripe CLI) can produce. To exercise it locally:\n\n  stripe listen --forward-to localhost:5000/api/v1/webhooks/stripe\n\nthen complete a checkout session above using Stripe's test card. Do not send this request from Postman as-is — it will fail signature verification by design (that's the security control working correctly)."
           },
           "response": []
         }
@@ -2683,6 +3318,76 @@
             "description": ""
           },
           "response": []
+        },
+        {
+          "name": "Get My Notifications",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{candidateToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/notifications/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "notifications",
+                "me"
+              ]
+            },
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                  ]
+                }
+              }
+            ]
+          },
+          "response": []
+        },
+        {
+          "name": "Get Unread Count",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{candidateToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/notifications/unread-count",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "notifications",
+                "unread-count"
+              ]
+            },
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                  ]
+                }
+              }
+            ]
+          },
+          "response": []
         }
       ],
       "description": ""
@@ -2747,6 +3452,41 @@
               ]
             },
             "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Get Audit Logs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/audit-logs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "audit-logs"
+              ]
+            },
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                  ]
+                }
+              }
+            ]
           },
           "response": []
         }

@@ -106,6 +106,45 @@ const deleteAssessment = catchAsync(async (req: Request, res: Response) => {
 	});
 });
 
+const createAssessmentVersion = catchAsync(async (req: Request, res: Response) => {
+	const currentUser = req.user as AuthenticatedUser;
+	const company = await companyService.getMyCompany(currentUser.id);
+
+	const assessment = await assessmentService.createAssessmentVersion(req.params.id as string, company.id);
+
+	res.status(StatusCodes.CREATED).json({
+		success: true,
+		message: "New version created successfully.",
+		data: assessment,
+	});
+});
+
+const getAssessmentVersions = catchAsync(async (req: Request, res: Response) => {
+	const currentUser = req.user as AuthenticatedUser;
+	const companyId = await resolveScopeCompanyId(currentUser);
+
+	const versions = await assessmentService.getAssessmentVersions(req.params.id as string, companyId);
+
+	res.status(StatusCodes.OK).json({
+		success: true,
+		message: "Assessment versions retrieved successfully.",
+		data: versions,
+	});
+});
+
+const restoreAssessmentVersion = catchAsync(async (req: Request, res: Response) => {
+	const currentUser = req.user as AuthenticatedUser;
+	const company = await companyService.getMyCompany(currentUser.id);
+
+	const assessment = await assessmentService.restoreAssessmentVersion(req.params.id as string, company.id);
+
+	res.status(StatusCodes.OK).json({
+		success: true,
+		message: "Assessment version restored successfully. A new draft version has been created.",
+		data: assessment,
+	});
+});
+
 export const assessmentController = {
 	createAssessment,
 	getAllAssessments,
@@ -114,4 +153,7 @@ export const assessmentController = {
 	publishAssessment,
 	closeAssessment,
 	deleteAssessment,
+	createAssessmentVersion,
+	getAssessmentVersions,
+	restoreAssessmentVersion,
 };

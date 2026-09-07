@@ -11,6 +11,10 @@ interface HCaptchaResponse {
 export const verifyCaptcha = async (token: string): Promise<void> => {
 	if (!config.captcha.hcaptchaSecretKey) return;
 
+	if (config.app.env !== "production") {
+		return;
+	}
+
 	const response = await fetch("https://hcaptcha.com/siteverify", {
 		method: "POST",
 		headers: {

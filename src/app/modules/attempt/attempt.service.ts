@@ -332,6 +332,59 @@ const recordProctoringEvent = async (attemptId: string, candidateId: string, pay
 	return { recorded: true };
 };
 
+const getProctoringEvents = async (attemptId: string, requester: { id: string; role: string; companyId?: string }) => {
+	const attempt = await prisma.assessmentAttempt.findUnique({
+		where: { id: attemptId },
+		select: { id: true, candidateId: true, assessment: { select: { companyId: true } } },
+	});
+
+	if (!attempt) {
+		throw new AppError(StatusCodes.NOT_FOUND, "Attempt not found.");
+	}
+
+	const isOwner = attempt.candidateId === requester.id;
+	const isOwningRecruiter =
+		requester.companyId !== undefined && attempt.assessment.companyId === requester.companyId;
+
+	if (requester.role !== "ADMIN" && !isOwner && !isOwningRecruiter) {
+		throw new AppError(StatusCodes.FORBIDDEN, "You don't have permission to view these proctoring events.");
+	}
+
+	return prisma.proctoringEvent.findMany({
+		where: { attemptId },
+		orderBy: { timestamp: "asc" },
+	});
+};
+
+const getProctoringEventById = async (attemptId: string, eventId: string, requester: { id: string; role: string; companyId?: string }) => {
+	const attempt = await prisma.assessmentAttempt.findUnique({
+		where: { id: attemptId },
+		select: { id: true, candidateId: true, assessment: { select: { companyId: true } } },
+	});
+
+	if (!attempt) {
+		throw new AppError(StatusCodes.NOT_FOUND, "Attempt not found.");
+	}
+
+	const isOwner = attempt.candidateId === requester.id;
+	const isOwningRecruiter =
+		requester.companyId !== undefined && attempt.assessment.companyId === requester.companyId;
+
+	if (requester.role !== "ADMIN" && !isOwner && !isOwningRecruiter) {
+		throw new AppError(StatusCodes.FORBIDDEN, "You don't have permission to view this proctoring event.");
+	}
+
+	const event = await prisma.proctoringEvent.findFirst({
+		where: { id: eventId, attemptId },
+	});
+
+	if (!event) {
+		throw new AppError(StatusCodes.NOT_FOUND, "Proctoring event not found.");
+	}
+
+	return event;
+};
+
 export const attemptService = {
 	startAttempt,
 	getMyAttempts,
@@ -339,4 +392,6 @@ export const attemptService = {
 	saveSubmission,
 	submitAttempt,
 	recordProctoringEvent,
+	getProctoringEvents,
+	getProctoringEventById,
 };

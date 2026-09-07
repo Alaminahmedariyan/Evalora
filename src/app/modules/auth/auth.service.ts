@@ -20,6 +20,7 @@ const callAuthEndpoint = async (
 	const body = await response.json().catch(() => null);
 
 	if (!response.ok) {
+		console.error(`[Auth] ${response.status} error:`, body ?? response.statusText);
 		throw new AppError(
 			response.status,
 			(body as { message?: string } | null)?.message ?? fallbackMessage,
