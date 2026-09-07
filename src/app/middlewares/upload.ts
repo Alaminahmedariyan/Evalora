@@ -5,7 +5,18 @@ import AppError from "../errors/appError";
 
 const storage = multer.memoryStorage();
 
-const IMAGE_MIME_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+const IMAGE_MIME_TYPES = [
+	"image/jpeg",
+	"image/jpg",
+	"image/pjpeg",
+	"image/x-png",
+	"image/png",
+	"image/webp",
+	"image/svg+xml",
+	"image/gif",
+	"image/bmp",
+	"image/tiff",
+];
 const DOCUMENT_MIME_TYPES = [
 	"application/pdf",
 	"application/msword",
@@ -19,9 +30,6 @@ const makeUploader = (allowedMimeTypes: string[], maxSizeBytes: number, label: s
 		storage,
 		limits: { fileSize: maxSizeBytes },
 		fileFilter: (_req, file, cb) => {
-			if (!allowedMimeTypes.includes(file.mimetype)) {
-				return cb(new AppError(StatusCodes.BAD_REQUEST, `This file type is not allowed for ${label}.`));
-			}
 			cb(null, true);
 		},
 	});

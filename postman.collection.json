@@ -748,46 +748,50 @@
           },
           "response": []
         },
-        {
-          "name": "Update My Profile (Candidate)",
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{candidateToken}}",
-                "type": "text"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/users/me",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "users",
-                "me"
-              ]
-            },
-            "description": "multipart/form-data — add an 'image' file field to test the avatar-upload path.",
-            "body": {
-              "mode": "urlencoded",
-              "urlencoded": [
+          {
+            "name": "Update My Profile (Candidate)",
+            "request": {
+              "method": "PATCH",
+              "header": [
                 {
-                  "key": "name",
-                  "value": "Tanvir Hasan (Updated)",
-                  "type": "text"
-                },
-                {
-                  "key": "phone",
-                  "value": "+8801700000000",
+                  "key": "Authorization",
+                  "value": "Bearer {{candidateToken}}",
                   "type": "text"
                 }
-              ]
-            }
+              ],
+              "url": {
+                "raw": "{{baseUrl}}/users/me",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "users",
+                  "me"
+                ]
+              },
+              "body": {
+                "mode": "formdata",
+                "formdata": [
+                  {
+                    "key": "name",
+                    "value": "Tanvir Hasan (Updated)",
+                    "type": "text"
+                  },
+                  {
+                    "key": "phone",
+                    "value": "+8801700000000",
+                    "type": "text"
+                  },
+                  {
+                    "key": "image",
+                    "type": "file",
+                    "src": []
+                  }
+                ]
+              }
+            },
+            "response": []
           },
-          "response": []
-        },
         {
           "name": "Get User By Id (Admin)",
           "request": {
@@ -1001,41 +1005,45 @@
           },
           "response": []
         },
-        {
-          "name": "Update My Company",
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{recruiterToken}}",
-                "type": "text"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/companies/me",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "companies",
-                "me"
-              ]
-            },
-            "description": "multipart/form-data — add a 'logo' file field in Postman's Body tab to test the Cloudinary upload path; this raw collection can't attach a binary file for you.",
-            "body": {
-              "mode": "urlencoded",
-              "urlencoded": [
+          {
+            "name": "Update My Company",
+            "request": {
+              "method": "PATCH",
+              "header": [
                 {
-                  "key": "description",
-                  "value": "Updated description via Postman.",
+                  "key": "Authorization",
+                  "value": "Bearer {{recruiterToken}}",
                   "type": "text"
                 }
-              ]
-            }
+              ],
+              "url": {
+                "raw": "{{baseUrl}}/companies/me",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "companies",
+                  "me"
+                ]
+              },
+              "body": {
+                "mode": "formdata",
+                "formdata": [
+                  {
+                    "key": "description",
+                    "value": "Updated description via Postman.",
+                    "type": "text"
+                  },
+                  {
+                    "key": "logo",
+                    "type": "file",
+                    "src": []
+                  }
+                ]
+              }
+            },
+            "response": []
           },
-          "response": []
-        },
         {
           "name": "Get All Companies (public, paginated + search)",
           "request": {
@@ -1274,10 +1282,9 @@
                 "me"
               ]
             },
-            "description": "multipart/form-data — add a 'resume' file field to test the resume-upload path.",
             "body": {
-              "mode": "urlencoded",
-              "urlencoded": [
+              "mode": "formdata",
+              "formdata": [
                 {
                   "key": "headline",
                   "value": "Updated via Postman",
@@ -1287,6 +1294,11 @@
                   "key": "location",
                   "value": "Dhaka, Bangladesh",
                   "type": "text"
+                },
+                {
+                  "key": "resume",
+                  "type": "file",
+                  "src": []
                 }
               ]
             }
