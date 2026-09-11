@@ -3,7 +3,7 @@ import { adminRoutes } from "../modules/admin/admin.routes";
 import { assessmentRoutes } from "../modules/assessment/assessment.routes";
 import { attemptRoutes } from "../modules/attempt/attempt.routes";
 import { authRoutes } from "../modules/auth/auth.routes";
-import { candidateRoutes } from "../modules/candidade/candidate.routes";
+import { candidateRoutes } from "../modules/candidate/candidate.routes";
 import { companyRoutes } from "../modules/company/company.routes";
 import { consentRoutes } from "../modules/consent/consent.routes";
 import { evaluationRoutes } from "../modules/evaluation/evaluation.routes";
