@@ -1,27 +1,18 @@
 import type { Request, Response } from "express";
 import { StatusCodes } from "http-status-codes";
 
+import { getCompanyIdForUser } from "../../../lib/getCompanyIdForUser";
 import type { AuthenticatedUser } from "../../middlewares/requireAuth";
 import { catchAsync } from "../../utils/catchAsync";
-import { companyService } from "../company/company.service";
 
 import { assessmentService } from "./assessment.service";
 
-/** ADMIN browses unscoped; RECRUITER is always scoped to their own company. */
-const resolveScopeCompanyId = async (
-	user: AuthenticatedUser,
-): Promise<string | undefined> => {
-	if (user.role === "ADMIN") return undefined;
-	const company = await companyService.getMyCompany(user.id);
-	return company.id;
-};
-
 const createAssessment = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
-	const company = await companyService.getMyCompany(currentUser.id);
+	const companyId = (await getCompanyIdForUser(currentUser, req))!;
 
 	const assessment = await assessmentService.createAssessment(
-		company.id,
+		companyId,
 		currentUser.id,
 		req.body,
 	);
@@ -35,7 +26,7 @@ const createAssessment = catchAsync(async (req: Request, res: Response) => {
 
 const getAllAssessments = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
-	const companyId = await resolveScopeCompanyId(currentUser);
+	const companyId = (await getCompanyIdForUser(currentUser, req)) ?? undefined;
 
 	const result = await assessmentService.getAllAssessments(
 		req.query as Record<string, unknown>,
@@ -52,7 +43,7 @@ const getAllAssessments = catchAsync(async (req: Request, res: Response) => {
 
 const getAssessmentById = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
-	const companyId = await resolveScopeCompanyId(currentUser);
+	const companyId = (await getCompanyIdForUser(currentUser, req)) ?? undefined;
 
 	const assessment = await assessmentService.getAssessmentById(
 		req.params.id as string,
@@ -68,11 +59,11 @@ const getAssessmentById = catchAsync(async (req: Request, res: Response) => {
 
 const updateAssessment = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
-	const company = await companyService.getMyCompany(currentUser.id);
+	const companyId = (await getCompanyIdForUser(currentUser, req))!;
 
 	const assessment = await assessmentService.updateAssessment(
 		req.params.id as string,
-		company.id,
+		companyId,
 		req.body,
 	);
 
@@ -85,11 +76,11 @@ const updateAssessment = catchAsync(async (req: Request, res: Response) => {
 
 const publishAssessment = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
-	const company = await companyService.getMyCompany(currentUser.id);
+	const companyId = (await getCompanyIdForUser(currentUser, req))!;
 
 	const assessment = await assessmentService.publishAssessment(
 		req.params.id as string,
-		company.id,
+		companyId,
 	);
 
 	res.status(StatusCodes.OK).json({
@@ -101,11 +92,11 @@ const publishAssessment = catchAsync(async (req: Request, res: Response) => {
 
 const closeAssessment = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
-	const company = await companyService.getMyCompany(currentUser.id);
+	const companyId = (await getCompanyIdForUser(currentUser, req))!;
 
 	const assessment = await assessmentService.closeAssessment(
 		req.params.id as string,
-		company.id,
+		companyId,
 	);
 
 	res.status(StatusCodes.OK).json({
@@ -117,11 +108,11 @@ const closeAssessment = catchAsync(async (req: Request, res: Response) => {
 
 const deleteAssessment = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
-	const company = await companyService.getMyCompany(currentUser.id);
+	const companyId = (await getCompanyIdForUser(currentUser, req))!;
 
 	const result = await assessmentService.softDeleteAssessment(
 		req.params.id as string,
-		company.id,
+		companyId,
 	);
 
 	res.status(StatusCodes.OK).json({
@@ -134,11 +125,11 @@ const deleteAssessment = catchAsync(async (req: Request, res: Response) => {
 const createAssessmentVersion = catchAsync(
 	async (req: Request, res: Response) => {
 		const currentUser = req.user as AuthenticatedUser;
-		const company = await companyService.getMyCompany(currentUser.id);
+		const companyId = (await getCompanyIdForUser(currentUser, req))!;
 
 		const assessment = await assessmentService.createAssessmentVersion(
 			req.params.id as string,
-			company.id,
+			companyId,
 		);
 
 		res.status(StatusCodes.CREATED).json({
@@ -152,7 +143,7 @@ const createAssessmentVersion = catchAsync(
 const getAssessmentVersions = catchAsync(
 	async (req: Request, res: Response) => {
 		const currentUser = req.user as AuthenticatedUser;
-		const companyId = await resolveScopeCompanyId(currentUser);
+		const companyId = (await getCompanyIdForUser(currentUser, req)) ?? undefined;
 
 		const versions = await assessmentService.getAssessmentVersions(
 			req.params.id as string,
@@ -170,11 +161,11 @@ const getAssessmentVersions = catchAsync(
 const restoreAssessmentVersion = catchAsync(
 	async (req: Request, res: Response) => {
 		const currentUser = req.user as AuthenticatedUser;
-		const company = await companyService.getMyCompany(currentUser.id);
+		const companyId = (await getCompanyIdForUser(currentUser, req))!;
 
 		const assessment = await assessmentService.restoreAssessmentVersion(
 			req.params.id as string,
-			company.id,
+			companyId,
 		);
 
 		res.status(StatusCodes.OK).json({

@@ -7,6 +7,7 @@ export default defineConfig({
     // Neon warm-up query and DB truncation between tests.
     setupFiles: ["./tests/setup.ts"],
     include: ["tests/**/*.test.ts"],
+    fileParallelism: false,
     pool: "forks",
     testTimeout: 30_000,
     hookTimeout: 30_000,

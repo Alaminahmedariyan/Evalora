@@ -3,6 +3,7 @@ import { StatusCodes } from "http-status-codes";
 import type { UserRole } from "../../../generated/prisma/enums";
 
 import { prisma } from "../../../lib/prisma";
+import { withTenantScope } from "../../../lib/prismaTenantScope";
 import AppError from "../../errors/appError";
 
 import { RESULT_LEADERBOARD_SELECT } from "./result.const";
@@ -30,10 +31,8 @@ const getResultByAttemptId = async (
 		attempt.assessment.companyId === requester.companyId;
 
 	if (requester.role !== "ADMIN" && !isOwner && !isOwningRecruiter) {
-		throw new AppError(
-			StatusCodes.FORBIDDEN,
-			"You don't have permission to view this result.",
-		);
+		// tenant-scoped via relation check (404 Not Found for IDOR protection)
+		throw new AppError(StatusCodes.NOT_FOUND, "Result not found.");
 	}
 
 	const result = await prisma.result.findUnique({
@@ -56,12 +55,9 @@ const getResultsForAssessment = async (
 	assessmentId: string,
 	companyId: string | undefined,
 ) => {
+	// tenant-scoped via withTenantScope
 	const assessment = await prisma.assessment.findFirst({
-		where: {
-			id: assessmentId,
-			deletedAt: null,
-			...(companyId && { companyId }),
-		},
+		where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId),
 	});
 
 	if (!assessment) {
@@ -84,8 +80,9 @@ const getResultsForAssessment = async (
  * useful. Re-run this after grading more submissions to refresh ranks.
  */
 const computeRanks = async (assessmentId: string, companyId: string) => {
+	// tenant-scoped via withTenantScope
 	const assessment = await prisma.assessment.findFirst({
-		where: { id: assessmentId, companyId, deletedAt: null },
+		where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId),
 	});
 
 	if (!assessment) {

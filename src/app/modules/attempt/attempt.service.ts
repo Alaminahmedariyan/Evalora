@@ -87,10 +87,8 @@ const getAttemptById = async (
 		attempt.assessment.companyId === requester.companyId;
 
 	if (requester.role !== "ADMIN" && !isOwner && !isOwningRecruiter) {
-		throw new AppError(
-			StatusCodes.FORBIDDEN,
-			"You don't have permission to view this attempt.",
-		);
+		// tenant-scoped via relation check (404 Not Found for IDOR protection)
+		throw new AppError(StatusCodes.NOT_FOUND, "Attempt not found.");
 	}
 
 	// Lazy auto-expire — catches attempts nobody explicitly submitted in time.
@@ -460,10 +458,8 @@ const getProctoringEvents = async (
 		attempt.assessment.companyId === requester.companyId;
 
 	if (requester.role !== "ADMIN" && !isOwner && !isOwningRecruiter) {
-		throw new AppError(
-			StatusCodes.FORBIDDEN,
-			"You don't have permission to view these proctoring events.",
-		);
+		// tenant-scoped via relation check (404 Not Found for IDOR protection)
+		throw new AppError(StatusCodes.NOT_FOUND, "Attempt not found.");
 	}
 
 	return prisma.proctoringEvent.findMany({
@@ -496,10 +492,8 @@ const getProctoringEventById = async (
 		attempt.assessment.companyId === requester.companyId;
 
 	if (requester.role !== "ADMIN" && !isOwner && !isOwningRecruiter) {
-		throw new AppError(
-			StatusCodes.FORBIDDEN,
-			"You don't have permission to view this proctoring event.",
-		);
+		// tenant-scoped via relation check (404 Not Found for IDOR protection)
+		throw new AppError(StatusCodes.NOT_FOUND, "Attempt not found.");
 	}
 
 	const event = await prisma.proctoringEvent.findFirst({

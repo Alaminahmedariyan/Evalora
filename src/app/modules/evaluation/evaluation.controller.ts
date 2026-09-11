@@ -1,25 +1,19 @@
 import type { Request, Response } from "express";
 import { StatusCodes } from "http-status-codes";
 
+import { getCompanyIdForUser } from "../../../lib/getCompanyIdForUser";
 import type { AuthenticatedUser } from "../../middlewares/requireAuth";
 import { catchAsync } from "../../utils/catchAsync";
-import { companyService } from "../company/company.service";
 
 import { evaluationService } from "./evaluation.service";
-
-/** ADMIN is unscoped; RECRUITER is always scoped to their own company. */
-const resolveScopeCompanyId = async (
-	user: AuthenticatedUser,
-): Promise<string | undefined> => {
-	if (user.role === "ADMIN") return undefined;
-	const company = await companyService.getMyCompany(user.id);
-	return company.id;
-};
 
 const getSubmissionsForAttempt = catchAsync(
 	async (req: Request, res: Response) => {
 		const currentUser = req.user as AuthenticatedUser;
-		const companyId = await resolveScopeCompanyId(currentUser);
+		const companyId =
+			currentUser.role === "RECRUITER"
+				? (await getCompanyIdForUser(currentUser, req)) ?? undefined
+				: undefined;
 
 		const submissions = await evaluationService.getSubmissionsForAttempt(
 			req.params.attemptId as string,
@@ -40,7 +34,10 @@ const getSubmissionsForAttempt = catchAsync(
 
 const getSubmissionById = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
-	const companyId = await resolveScopeCompanyId(currentUser);
+	const companyId =
+		currentUser.role === "RECRUITER"
+			? (await getCompanyIdForUser(currentUser, req)) ?? undefined
+			: undefined;
 
 	const submission = await evaluationService.getSubmissionById(
 		req.params.id as string,
@@ -61,11 +58,11 @@ const getSubmissionById = catchAsync(async (req: Request, res: Response) => {
 const getPendingEvaluations = catchAsync(
 	async (req: Request, res: Response) => {
 		const currentUser = req.user as AuthenticatedUser;
-		const company = await companyService.getMyCompany(currentUser.id);
+		const companyId = (await getCompanyIdForUser(currentUser, req))!;
 
 		const submissions = await evaluationService.getPendingEvaluations(
 			req.params.assessmentId as string,
-			company.id,
+			companyId,
 		);
 
 		res.status(StatusCodes.OK).json({
@@ -78,12 +75,12 @@ const getPendingEvaluations = catchAsync(
 
 const evaluateSubmission = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
-	const company = await companyService.getMyCompany(currentUser.id);
+	const companyId = (await getCompanyIdForUser(currentUser, req))!;
 
 	const submission = await evaluationService.evaluateSubmission(
 		req.params.id as string,
 		currentUser.id,
-		company.id,
+		companyId,
 		req.body,
 	);
 

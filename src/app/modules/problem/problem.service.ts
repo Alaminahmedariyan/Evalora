@@ -4,6 +4,7 @@ import type { Prisma } from "../../../generated/prisma/client";
 import type { ProblemWhereInput } from "../../../generated/prisma/models/Problem";
 
 import { prisma } from "../../../lib/prisma";
+import { withTenantScope } from "../../../lib/prismaTenantScope";
 import AppError from "../../errors/appError";
 import { QueryBuilder } from "../../queryBuilder";
 import { generateUniqueSlug } from "../../utils/generateUniqueSlug";
@@ -44,7 +45,9 @@ const createProblem = async (
 ) => {
 	const slug = await generateUniqueSlug(payload.title, (candidate) =>
 		prisma.problem
-			.findUnique({ where: { companyId_slug: { companyId, slug: candidate } } })
+			.findUnique({
+				where: { companyId_slug: { companyId, slug: candidate } },
+			})
 			.then(Boolean),
 	);
 
@@ -113,13 +116,15 @@ const getAllProblems = async (
 	query: Record<string, unknown>,
 	companyId?: string,
 ) => {
-	const tenantScope = companyId ? { companyId } : undefined;
+	// tenant-scoped via withTenantScope
+	const tenantScope = withTenantScope(undefined, companyId);
 	return problemQueryBuilder.execute(query, tenantScope);
 };
 
 const getProblemById = async (id: string, companyId?: string) => {
+	// tenant-scoped via withTenantScope
 	const problem = await prisma.problem.findFirst({
-		where: { id, deletedAt: null, ...(companyId && { companyId }) },
+		where: withTenantScope({ id, deletedAt: null }, companyId),
 		select: PROBLEM_DETAIL_SELECT,
 	});
 
@@ -152,8 +157,9 @@ const updateProblem = async (
 	companyId: string,
 	payload: UpdateProblemInput,
 ) => {
+	// tenant-scoped via withTenantScope
 	const existing = await prisma.problem.findFirst({
-		where: { id, companyId, deletedAt: null },
+		where: withTenantScope({ id, deletedAt: null }, companyId),
 	});
 
 	if (!existing) {
@@ -232,8 +238,9 @@ const updateProblem = async (
  * assessment would silently change candidates' total marks mid-flight.
  */
 const softDeleteProblem = async (id: string, companyId: string) => {
+	// tenant-scoped via withTenantScope
 	const existing = await prisma.problem.findFirst({
-		where: { id, companyId, deletedAt: null },
+		where: withTenantScope({ id, deletedAt: null }, companyId),
 	});
 
 	if (!existing) {

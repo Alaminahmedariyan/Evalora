@@ -1,32 +1,18 @@
 import type { Request, Response } from "express";
 import { StatusCodes } from "http-status-codes";
 
+import { getCompanyIdForUser } from "../../../lib/getCompanyIdForUser";
 import type { AuthenticatedUser } from "../../middlewares/requireAuth";
 import { catchAsync } from "../../utils/catchAsync";
-import { companyService } from "../company/company.service";
 
 import { problemService } from "./problem.service";
 
-/**
- * ADMIN browses across every company (no scoping); RECRUITER is always
- * scoped to their own company. Resolving "my company" here (rather than
- * baking it into problemService) keeps company-lookup logic in one place
- * (company.service.ts) instead of duplicating it per module.
- */
-const resolveScopeCompanyId = async (
-	user: AuthenticatedUser,
-): Promise<string | undefined> => {
-	if (user.role === "ADMIN") return undefined;
-	const company = await companyService.getMyCompany(user.id);
-	return company.id;
-};
-
 const createProblem = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
-	const company = await companyService.getMyCompany(currentUser.id);
+	const companyId = (await getCompanyIdForUser(currentUser, req))!;
 
 	const problem = await problemService.createProblem(
-		company.id,
+		companyId,
 		currentUser.id,
 		req.body,
 	);
@@ -40,7 +26,7 @@ const createProblem = catchAsync(async (req: Request, res: Response) => {
 
 const getAllProblems = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
-	const companyId = await resolveScopeCompanyId(currentUser);
+	const companyId = (await getCompanyIdForUser(currentUser, req)) ?? undefined;
 
 	const result = await problemService.getAllProblems(
 		req.query as Record<string, unknown>,
@@ -57,7 +43,7 @@ const getAllProblems = catchAsync(async (req: Request, res: Response) => {
 
 const getProblemById = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
-	const companyId = await resolveScopeCompanyId(currentUser);
+	const companyId = (await getCompanyIdForUser(currentUser, req)) ?? undefined;
 
 	const problem = await problemService.getProblemById(
 		req.params.id as string,
@@ -73,11 +59,11 @@ const getProblemById = catchAsync(async (req: Request, res: Response) => {
 
 const updateProblem = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
-	const company = await companyService.getMyCompany(currentUser.id);
+	const companyId = (await getCompanyIdForUser(currentUser, req))!;
 
 	const problem = await problemService.updateProblem(
 		req.params.id as string,
-		company.id,
+		companyId,
 		req.body,
 	);
 
@@ -90,11 +76,11 @@ const updateProblem = catchAsync(async (req: Request, res: Response) => {
 
 const deleteProblem = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
-	const company = await companyService.getMyCompany(currentUser.id);
+	const companyId = (await getCompanyIdForUser(currentUser, req))!;
 
 	const result = await problemService.softDeleteProblem(
 		req.params.id as string,
-		company.id,
+		companyId,
 	);
 
 	res.status(StatusCodes.OK).json({

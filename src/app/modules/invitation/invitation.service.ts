@@ -10,6 +10,7 @@ import type {
 import type { AssessmentInvitationWhereInput } from "../../../generated/prisma/models/AssessmentInvitation";
 
 import { prisma } from "../../../lib/prisma";
+import { withTenantScope } from "../../../lib/prismaTenantScope";
 import AppError from "../../errors/appError";
 import { QueryBuilder } from "../../queryBuilder";
 import type { PrismaDelegate } from "../../queryBuilder/types";
@@ -102,8 +103,9 @@ const inviteCandidates = async (
 	companyId: string,
 	payload: InviteCandidatesInput,
 ) => {
+	// tenant-scoped via withTenantScope
 	const assessment = await prisma.assessment.findFirst({
-		where: { id: assessmentId, companyId, deletedAt: null },
+		where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId),
 	});
 
 	if (!assessment) {
@@ -201,8 +203,9 @@ const getInvitationsForAssessment = async (
 		);
 	}
 
+	// tenant-scoped via withTenantScope
 	const assessment = await prisma.assessment.findFirst({
-		where: { id: assessmentId, companyId, deletedAt: null },
+		where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId),
 	});
 
 	if (!assessment) {
@@ -252,10 +255,8 @@ const getInvitationById = async (
 		invitation.assessment.companyId === requester.companyId;
 
 	if (requester.role !== "ADMIN" && !isInvitedCandidate && !isOwningRecruiter) {
-		throw new AppError(
-			StatusCodes.FORBIDDEN,
-			"You don't have permission to view this invitation.",
-		);
+		// tenant-scoped via relation check (404 Not Found for IDOR protection)
+		throw new AppError(StatusCodes.NOT_FOUND, "Invitation not found.");
 	}
 
 	return invitation;
@@ -360,12 +361,13 @@ const declineInvitation = async (id: string, userId: string, email: string) => {
  * means delete here, not a soft-delete.
  */
 const cancelInvitation = async (id: string, companyId: string) => {
-	const invitation = await prisma.assessmentInvitation.findUnique({
-		where: { id },
+	// tenant-scoped via relation filter
+	const invitation = await prisma.assessmentInvitation.findFirst({
+		where: { id, assessment: withTenantScope({ deletedAt: null }, companyId) },
 		include: { assessment: true },
 	});
 
-	if (!invitation || invitation.assessment.companyId !== companyId) {
+	if (!invitation) {
 		throw new AppError(StatusCodes.NOT_FOUND, "Invitation not found.");
 	}
 

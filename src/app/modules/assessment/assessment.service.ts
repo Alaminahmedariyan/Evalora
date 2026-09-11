@@ -4,6 +4,7 @@ import type { Prisma } from "../../../generated/prisma/client";
 import type { AssessmentWhereInput } from "../../../generated/prisma/models/Assessment";
 
 import { prisma } from "../../../lib/prisma";
+import { withTenantScope } from "../../../lib/prismaTenantScope";
 import AppError from "../../errors/appError";
 import { QueryBuilder } from "../../queryBuilder";
 import { generateUniqueSlug } from "../../utils/generateUniqueSlug";
@@ -45,8 +46,9 @@ const assertProblemsBelongToCompany = async (
 	companyId: string,
 	problemIds: string[],
 ) => {
+	// tenant-scoped via withTenantScope
 	const found = await prisma.problem.findMany({
-		where: { id: { in: problemIds }, companyId, deletedAt: null },
+		where: withTenantScope({ id: { in: problemIds }, deletedAt: null }, companyId),
 		select: { id: true },
 	});
 
@@ -115,13 +117,15 @@ const getAllAssessments = async (
 	query: Record<string, unknown>,
 	companyId?: string,
 ) => {
-	const tenantScope = companyId ? { companyId } : undefined;
+	// tenant-scoped via withTenantScope
+	const tenantScope = withTenantScope(undefined, companyId);
 	return assessmentQueryBuilder.execute(query, tenantScope);
 };
 
 const getAssessmentById = async (id: string, companyId?: string) => {
+	// tenant-scoped via withTenantScope
 	const assessment = await prisma.assessment.findFirst({
-		where: { id, deletedAt: null, ...(companyId && { companyId }) },
+		where: withTenantScope({ id, deletedAt: null }, companyId),
 		select: ASSESSMENT_DETAIL_SELECT,
 	});
 
@@ -137,8 +141,9 @@ const updateAssessment = async (
 	companyId: string,
 	payload: UpdateAssessmentInput,
 ) => {
+	// tenant-scoped via withTenantScope
 	const existing = await prisma.assessment.findFirst({
-		where: { id, companyId, deletedAt: null },
+		where: withTenantScope({ id, deletedAt: null }, companyId),
 	});
 
 	if (!existing) {
@@ -204,8 +209,9 @@ const updateAssessment = async (
 };
 
 const publishAssessment = async (id: string, companyId: string) => {
+	// tenant-scoped via withTenantScope
 	const assessment = await prisma.assessment.findFirst({
-		where: { id, companyId, deletedAt: null },
+		where: withTenantScope({ id, deletedAt: null }, companyId),
 		include: { assessmentProblems: true },
 	});
 
@@ -250,8 +256,9 @@ const publishAssessment = async (id: string, companyId: string) => {
 };
 
 const closeAssessment = async (id: string, companyId: string) => {
+	// tenant-scoped via withTenantScope
 	const assessment = await prisma.assessment.findFirst({
-		where: { id, companyId, deletedAt: null },
+		where: withTenantScope({ id, deletedAt: null }, companyId),
 	});
 
 	if (!assessment) {
@@ -273,8 +280,9 @@ const closeAssessment = async (id: string, companyId: string) => {
 };
 
 const softDeleteAssessment = async (id: string, companyId: string) => {
+	// tenant-scoped via withTenantScope
 	const assessment = await prisma.assessment.findFirst({
-		where: { id, companyId, deletedAt: null },
+		where: withTenantScope({ id, deletedAt: null }, companyId),
 	});
 
 	if (!assessment) {
@@ -297,8 +305,9 @@ const softDeleteAssessment = async (id: string, companyId: string) => {
 };
 
 const createAssessmentVersion = async (id: string, companyId: string) => {
+	// tenant-scoped via withTenantScope
 	const existing = await prisma.assessment.findFirst({
-		where: { id, companyId, deletedAt: null },
+		where: withTenantScope({ id, deletedAt: null }, companyId),
 		include: { assessmentProblems: { include: { problem: true } } },
 	});
 
@@ -315,23 +324,20 @@ const createAssessmentVersion = async (id: string, companyId: string) => {
 
 	const result = await prisma.$transaction(async (tx) => {
 		const maxVersionResult = await tx.assessment.aggregate({
-			where: {
+			where: withTenantScope(
+				{ slug: existing.slug, deletedAt: null },
 				companyId,
-				slug: existing.slug,
-				deletedAt: null,
-			},
+			),
 			_max: { version: true },
 		});
 
 		const nextVersion = (maxVersionResult._max.version || existing.version) + 1;
 
 		await tx.assessment.updateMany({
-			where: {
+			where: withTenantScope(
+				{ slug: existing.slug, isLatestVersion: true, deletedAt: null },
 				companyId,
-				slug: existing.slug,
-				isLatestVersion: true,
-				deletedAt: null,
-			},
+			),
 			data: { isLatestVersion: false },
 		});
 
@@ -374,8 +380,9 @@ const createAssessmentVersion = async (id: string, companyId: string) => {
 };
 
 const getAssessmentVersions = async (id: string, companyId?: string) => {
+	// tenant-scoped via withTenantScope
 	const existing = await prisma.assessment.findFirst({
-		where: { id, deletedAt: null, ...(companyId && { companyId }) },
+		where: withTenantScope({ id, deletedAt: null }, companyId),
 		select: { id: true, companyId: true, slug: true },
 	});
 
@@ -406,8 +413,9 @@ const getAssessmentVersions = async (id: string, companyId?: string) => {
 };
 
 const restoreAssessmentVersion = async (id: string, companyId: string) => {
+	// tenant-scoped via withTenantScope
 	const target = await prisma.assessment.findFirst({
-		where: { id, companyId, deletedAt: null },
+		where: withTenantScope({ id, deletedAt: null }, companyId),
 		include: { assessmentProblems: { include: { problem: true } } },
 	});
 

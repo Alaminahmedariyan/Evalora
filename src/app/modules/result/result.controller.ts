@@ -1,24 +1,15 @@
 import type { Request, Response } from "express";
 import { StatusCodes } from "http-status-codes";
 
+import { getCompanyIdForUser } from "../../../lib/getCompanyIdForUser";
 import type { AuthenticatedUser } from "../../middlewares/requireAuth";
 import { catchAsync } from "../../utils/catchAsync";
-import { companyService } from "../company/company.service";
 
 import { resultService } from "./result.service";
 
-/** ADMIN unscoped; RECRUITER scoped to own company; CANDIDATE resolves neither (owns their own attempt instead). */
-const resolveScopeCompanyId = async (
-	user: AuthenticatedUser,
-): Promise<string | undefined> => {
-	if (user.role !== "RECRUITER") return undefined;
-	const company = await companyService.getMyCompany(user.id);
-	return company.id;
-};
-
 const getResultByAttemptId = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
-	const companyId = await resolveScopeCompanyId(currentUser);
+	const companyId = (await getCompanyIdForUser(currentUser, req)) ?? undefined;
 
 	const result = await resultService.getResultByAttemptId(
 		req.params.attemptId as string,
@@ -39,10 +30,7 @@ const getResultByAttemptId = catchAsync(async (req: Request, res: Response) => {
 const getResultsForAssessment = catchAsync(
 	async (req: Request, res: Response) => {
 		const currentUser = req.user as AuthenticatedUser;
-		const companyId =
-			currentUser.role === "ADMIN"
-				? undefined
-				: (await companyService.getMyCompany(currentUser.id)).id;
+		const companyId = (await getCompanyIdForUser(currentUser, req)) ?? undefined;
 
 		const results = await resultService.getResultsForAssessment(
 			req.params.assessmentId as string,
@@ -59,11 +47,11 @@ const getResultsForAssessment = catchAsync(
 
 const computeRanks = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
-	const company = await companyService.getMyCompany(currentUser.id);
+	const companyId = (await getCompanyIdForUser(currentUser, req))!;
 
 	const result = await resultService.computeRanks(
 		req.params.assessmentId as string,
-		company.id,
+		companyId,
 	);
 
 	res.status(StatusCodes.OK).json({

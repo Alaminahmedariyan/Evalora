@@ -3,6 +3,7 @@ import { StatusCodes } from "http-status-codes";
 import type { UserRole } from "../../../generated/prisma/enums";
 
 import { prisma } from "../../../lib/prisma";
+import { withTenantScope } from "../../../lib/prismaTenantScope";
 import AppError from "../../errors/appError";
 import { SUBMISSION_GRADING_SELECT } from "../attempt/attempt.const";
 import type { ManualEvaluationInput } from "../attempt/attempt.interface";
@@ -16,10 +17,8 @@ const assertCanGrade = (
 	role: UserRole,
 ) => {
 	if (role !== "ADMIN" && requesterCompanyId !== submissionCompanyId) {
-		throw new AppError(
-			StatusCodes.FORBIDDEN,
-			"You don't have permission to access this submission.",
-		);
+		// tenant-scoped via relation check (404 Not Found for IDOR protection)
+		throw new AppError(StatusCodes.NOT_FOUND, "Submission not found.");
 	}
 };
 
@@ -81,8 +80,9 @@ const getPendingEvaluations = async (
 	assessmentId: string,
 	companyId: string,
 ) => {
+	// tenant-scoped via withTenantScope
 	const assessment = await prisma.assessment.findFirst({
-		where: { id: assessmentId, companyId, deletedAt: null },
+		where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId),
 	});
 
 	if (!assessment) {

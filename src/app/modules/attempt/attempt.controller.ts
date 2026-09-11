@@ -1,21 +1,11 @@
 import type { Request, Response } from "express";
 import { StatusCodes } from "http-status-codes";
 
+import { getCompanyIdForUser } from "../../../lib/getCompanyIdForUser";
 import type { AuthenticatedUser } from "../../middlewares/requireAuth";
 import { catchAsync } from "../../utils/catchAsync";
-import { companyService } from "../company/company.service";
 
 import { attemptService } from "./attempt.service";
-
-/** ADMIN is unscoped; RECRUITER is always scoped to their own company. */
-const resolveScopeCompanyId = async (
-	user: AuthenticatedUser,
-): Promise<string | undefined> => {
-	if (user.role === "ADMIN") return undefined;
-	if (user.role !== "RECRUITER") return undefined;
-	const company = await companyService.getMyCompany(user.id);
-	return company.id;
-};
 
 const startAttempt = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
@@ -46,7 +36,10 @@ const getMyAttempts = catchAsync(async (req: Request, res: Response) => {
 
 const getAttemptById = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
-	const companyId = await resolveScopeCompanyId(currentUser);
+	const companyId =
+		currentUser.role === "RECRUITER"
+			? (await getCompanyIdForUser(currentUser, req)) ?? undefined
+			: undefined;
 
 	const attempt = await attemptService.getAttemptById(req.params.id as string, {
 		id: currentUser.id,
@@ -115,7 +108,10 @@ const recordProctoringEvent = catchAsync(
 
 const getProctoringEvents = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
-	const companyId = await resolveScopeCompanyId(currentUser);
+	const companyId =
+		currentUser.role === "RECRUITER"
+			? (await getCompanyIdForUser(currentUser, req)) ?? undefined
+			: undefined;
 
 	const events = await attemptService.getProctoringEvents(
 		req.params.id as string,
@@ -136,7 +132,10 @@ const getProctoringEvents = catchAsync(async (req: Request, res: Response) => {
 const getProctoringEventById = catchAsync(
 	async (req: Request, res: Response) => {
 		const currentUser = req.user as AuthenticatedUser;
-		const companyId = await resolveScopeCompanyId(currentUser);
+		const companyId =
+			currentUser.role === "RECRUITER"
+				? (await getCompanyIdForUser(currentUser, req)) ?? undefined
+				: undefined;
 
 		const event = await attemptService.getProctoringEventById(
 			req.params.id as string,
