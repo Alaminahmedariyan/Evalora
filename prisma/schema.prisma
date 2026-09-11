@@ -210,6 +210,8 @@ model User {
   notifications Notification[]
   auditLogs     AuditLog[]
 
+  idempotencyKeys IdempotencyKey[]
+
   @@index([role])
   @@index([status])
   @@index([deletedAt])
@@ -941,3 +943,23 @@ model UserConsent {
   @@index([userId])
   @@map("user_consents")
 }
+
+model IdempotencyKey {
+  id          String   @id @default(cuid())
+  key         String
+  userId      String
+  endpoint    String
+  requestHash String
+  response    Json
+  statusCode  Int
+  expiresAt   DateTime @db.Timestamptz(3)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([key, userId])
+  @@index([expiresAt])
+  @@index([userId, createdAt])
+  @@map("idempotency_keys")
+}
+

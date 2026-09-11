@@ -1,5 +1,6 @@
 import { Router } from "express";
 
+import { idempotency } from "../../middlewares/idempotency";
 import { requireAuth, requireRole } from "../../middlewares/requireAuth";
 import { validateRequest } from "../../middlewares/validateRequest";
 
@@ -13,6 +14,7 @@ router.use(requireAuth);
 router.post(
 	"/assessments/:assessmentId",
 	requireRole("RECRUITER"),
+	idempotency(),
 	validateRequest(invitationValidation.inviteCandidatesSchema),
 	invitationController.inviteCandidates,
 );

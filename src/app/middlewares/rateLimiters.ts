@@ -7,6 +7,7 @@ const makeLimiter = (windowMs: number, limit: number, message: string) =>
 		limit,
 		standardHeaders: true,
 		legacyHeaders: false,
+		skip: () => process.env.NODE_ENV === "test",
 		message: {
 			success: false,
 			statusCode: StatusCodes.TOO_MANY_REQUESTS,
