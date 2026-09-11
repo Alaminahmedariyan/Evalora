@@ -1,42 +1,32 @@
-import type { NextFunction, Request, Response } from "express";
+﻿import type { NextFunction, Request, Response } from "express";
 import { StatusCodes } from "http-status-codes";
 import type { z } from "zod";
 
 import AppError from "../errors/appError";
+import { validateRequest } from "./validateRequest";
 
 export const validateRequestWithFile = (schema: z.ZodTypeAny) => {
 	return async (
 		req: Request,
-		_res: Response,
+		res: Response,
 		next: NextFunction,
 	): Promise<void> => {
-		try {
-			if (req.body?.data) {
+		// Multipart requests send a JSON-stringified body in req.body.data
+		// (multer keeps the file in req.file; req.body holds only the data field).
+		if (typeof req.body?.data === "string") {
+			try {
 				req.body = JSON.parse(req.body.data);
+			} catch {
+				return next(
+					new AppError(
+						StatusCodes.BAD_REQUEST,
+						"Invalid JSON in 'data' field.",
+					),
+				);
 			}
-		} catch {
-			return next(
-				new AppError(StatusCodes.BAD_REQUEST, "Invalid JSON in 'data' field."),
-			);
 		}
 
-		const result = await schema.safeParseAsync(req.body ?? {});
-
-		if (!result.success) {
-			return next(
-				new AppError(
-					StatusCodes.BAD_REQUEST,
-					result.error.issues[0]?.message ?? "Validation failed.",
-					"VALIDATION_ERROR",
-					result.error.issues.map((issue) => ({
-						field: issue.path.join("."),
-						message: issue.message,
-					})),
-				),
-			);
-		}
-
-		req.body = result.data;
-		next();
+		// Delegate the actual validation to the existing middleware.
+		return validateRequest(schema)(req, res, next);
 	};
 };
