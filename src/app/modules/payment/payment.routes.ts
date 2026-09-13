@@ -3,6 +3,7 @@ import { Router } from "express";
 import { idempotency } from "../../middlewares/idempotency";
 import { requireAuth, requireRole } from "../../middlewares/requireAuth";
 import { validateRequest } from "../../middlewares/validateRequest";
+import { paymentCheckoutLimiter } from "../../middlewares/rateLimiters";
 
 import { paymentController } from "./payment.controller";
 import { paymentValidation } from "./payment.validation";
@@ -15,6 +16,7 @@ router.post(
 	"/checkout",
 	requireRole("RECRUITER"),
 	idempotency(),
+	paymentCheckoutLimiter,
 	validateRequest(paymentValidation.createCheckoutSchema),
 	paymentController.createCheckoutSession,
 );

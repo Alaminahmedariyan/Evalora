@@ -3,6 +3,7 @@ import { Router } from "express";
 import { idempotency } from "../../middlewares/idempotency";
 import { requireAuth, requireRole } from "../../middlewares/requireAuth";
 import { validateRequest } from "../../middlewares/validateRequest";
+import { invitationAcceptLimiter } from "../../middlewares/rateLimiters";
 
 import { invitationController } from "./invitation.controller";
 import { invitationValidation } from "./invitation.validation";
@@ -39,12 +40,14 @@ router.get("/:id", invitationController.getInvitationById);
 router.post(
 	"/:id/accept",
 	requireRole("CANDIDATE"),
+	invitationAcceptLimiter,
 	invitationController.acceptInvitation,
 );
 
 router.post(
 	"/:id/decline",
 	requireRole("CANDIDATE"),
+	invitationAcceptLimiter,
 	invitationController.declineInvitation,
 );
 

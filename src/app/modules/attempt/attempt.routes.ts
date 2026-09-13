@@ -3,6 +3,10 @@ import { Router } from "express";
 import { idempotency } from "../../middlewares/idempotency";
 import { requireAuth, requireRole } from "../../middlewares/requireAuth";
 import { validateRequest } from "../../middlewares/validateRequest";
+import {
+	attemptSubmitLimiter,
+	submissionAnswerLimiter,
+} from "../../middlewares/rateLimiters";
 
 import { attemptController } from "./attempt.controller";
 import { attemptValidation } from "./attempt.validation";
@@ -29,6 +33,7 @@ router.put(
 	"/:id/submissions/:problemId",
 	requireRole("CANDIDATE"),
 	idempotency(),
+	submissionAnswerLimiter,
 	validateRequest(attemptValidation.saveSubmissionSchema),
 	attemptController.saveSubmission,
 );
@@ -37,6 +42,7 @@ router.post(
 	"/:id/submit",
 	requireRole("CANDIDATE"),
 	idempotency(),
+	attemptSubmitLimiter,
 	attemptController.submitAttempt,
 );
 
