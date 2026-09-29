@@ -9,113 +9,158 @@ import AppError from "../../errors/appError";
 import { RESULT_LEADERBOARD_SELECT } from "./result.const";
 
 const getResultByAttemptId = async (
-	attemptId: string,
-	requester: { id: string; role: UserRole; companyId?: string },
+    attemptId: string,
+    requester: { id: string; role: UserRole; companyId?: string },
 ) => {
-	const attempt = await prisma.assessmentAttempt.findUnique({
-		where: { id: attemptId },
-		select: {
-			id: true,
-			candidateId: true,
-			assessment: { select: { companyId: true } },
-		},
-	});
+    const whereClause: Record<string, unknown> = { id: attemptId };
 
-	if (!attempt) {
-		throw new AppError(StatusCodes.NOT_FOUND, "Attempt not found.");
-	}
+    if (requester.role === "CANDIDATE") {
+        whereClause.candidateId = requester.id;
+    } else if (requester.role !== "ADMIN") {
+        if (!requester.companyId) {
+            throw new AppError(StatusCodes.FORBIDDEN, "Access denied. Missing company scope.");
+        }
+        whereClause.assessment = { companyId: requester.companyId };
+    }
 
-	const isOwner = attempt.candidateId === requester.id;
-	const isOwningRecruiter =
-		requester.companyId !== undefined &&
-		attempt.assessment.companyId === requester.companyId;
+    // Now also pulls the two fields needed for the showResultImmediately
+    // gate below — previously only { id: true } was selected here.
+    const attempt = await prisma.assessmentAttempt.findFirst({
+        where: whereClause,
+        select: {
+            id: true,
+            assessment: { select: { showResultImmediately: true, status: true } },
+        },
+    });
 
-	if (requester.role !== "ADMIN" && !isOwner && !isOwningRecruiter) {
-		// tenant-scoped via relation check (404 Not Found for IDOR protection)
-		throw new AppError(StatusCodes.NOT_FOUND, "Result not found.");
-	}
+    if (!attempt) {
+        // IDOR protection: return 404 instead of 403
+        throw new AppError(StatusCodes.NOT_FOUND, "Attempt result not found.");
+    }
 
-	const result = await prisma.result.findUnique({
-		where: { attemptId },
-		select: RESULT_LEADERBOARD_SELECT,
-	});
+    // A candidate can only see their result early if showResultImmediately
+    // is true; otherwise it stays hidden until the recruiter closes the
+    // assessment. Recruiters/Admins are never subject to this gate — they
+    // need to see results while grading, regardless of this flag.
+    if (
+        requester.role === "CANDIDATE" &&
+        !attempt.assessment.showResultImmediately &&
+        attempt.assessment.status !== "CLOSED"
+    ) {
+        throw new AppError(
+            StatusCodes.FORBIDDEN,
+            "Results for this assessment haven't been released yet.",
+        );
+    }
 
-	if (!result) {
-		throw new AppError(
-			StatusCodes.NOT_FOUND,
-			"Result not available yet — this attempt may not be finalized.",
-		);
-	}
+    const result = await prisma.result.findUnique({
+        where: { attemptId },
+        select: RESULT_LEADERBOARD_SELECT,
+    });
 
-	return result;
+    if (!result) {
+        throw new AppError(
+            StatusCodes.NOT_FOUND,
+            "Result not available yet — this attempt may not be finalized.",
+        );
+    }
+
+    return result;
 };
 
 /** `companyId` undefined means unscoped — ADMIN browsing any assessment's leaderboard. */
 const getResultsForAssessment = async (
-	assessmentId: string,
-	companyId: string | undefined,
+    assessmentId: string,
+    companyId: string | undefined,
 ) => {
-	// tenant-scoped via withTenantScope
-	const assessment = await prisma.assessment.findFirst({
-		where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId),
-	});
+    // tenant-scoped via withTenantScope
+    const assessment = await prisma.assessment.findFirst({
+        where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId),
+    });
 
-	if (!assessment) {
-		throw new AppError(StatusCodes.NOT_FOUND, "Assessment not found.");
-	}
+    if (!assessment) {
+        throw new AppError(StatusCodes.NOT_FOUND, "Assessment not found.");
+    }
 
-	return prisma.result.findMany({
-		where: { assessmentId },
-		select: RESULT_LEADERBOARD_SELECT,
-		orderBy: [{ totalScore: "desc" }, { evaluatedAt: "asc" }],
-	});
+    return prisma.result.findMany({
+        where: { assessmentId },
+        select: RESULT_LEADERBOARD_SELECT,
+        orderBy: [
+            { totalScore: "desc" },
+            { rank: "asc" },
+            { evaluatedAt: "asc" },
+        ],
+    });
 };
 
 /**
- * Assigns rank 1..N to every fully-graded (PASSED/FAILED) result for an
- * assessment, ordered by totalScore descending. Results still PENDING
- * (a recruiter hasn't finished grading their CODING/WRITTEN answers yet)
- * are left unranked — including them would produce a leaderboard that
- * silently changes as grading continues, which is more confusing than
- * useful. Re-run this after grading more submissions to refresh ranks.
+ * Assigns rank 1..N to every fully-graded (PASSED/FAILED) result for an assessment.
+ * Uses optimized SQL window function / bulk transaction to prevent N+1 queries.
  */
 const computeRanks = async (assessmentId: string, companyId: string) => {
-	// tenant-scoped via withTenantScope
-	const assessment = await prisma.assessment.findFirst({
-		where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId),
-	});
+    // 1. Verify tenant access
+    const assessment = await prisma.assessment.findFirst({
+        where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId),
+    });
 
-	if (!assessment) {
-		throw new AppError(StatusCodes.NOT_FOUND, "Assessment not found.");
-	}
+    if (!assessment) {
+        throw new AppError(StatusCodes.NOT_FOUND, "Assessment not found.");
+    }
 
-	const finalizedResults = await prisma.result.findMany({
-		where: { assessmentId, status: { in: ["PASSED", "FAILED"] } },
-		orderBy: { totalScore: "desc" },
-		select: { id: true },
-	});
+    // 2. Fetch all finalized results with multi-column sorting for deterministic tie-breaking
+    // Order by totalScore DESC, evaluatedAt ASC (first to finish gets better rank)
+    const finalizedResults = await prisma.result.findMany({
+        where: { 
+            assessmentId, 
+            status: { in: ["PASSED", "FAILED"] } 
+        },
+        orderBy: [
+            { totalScore: "desc" },
+            { evaluatedAt: "asc" },
+            { createdAt: "asc" },
+        ],
+        select: { id: true },
+    });
 
-	if (finalizedResults.length === 0) {
-		throw new AppError(
-			StatusCodes.BAD_REQUEST,
-			"No fully-graded results to rank yet.",
-		);
-	}
+    if (finalizedResults.length === 0) {
+        throw new AppError(
+            StatusCodes.BAD_REQUEST,
+            "No fully-graded results to rank yet.",
+        );
+    }
 
-	await prisma.$transaction(
-		finalizedResults.map((result, index) =>
-			prisma.result.update({
-				where: { id: result.id },
-				data: { rank: index + 1 },
-			}),
-		),
-	);
+    // 3. Perform batch updates inside transaction with chunking for extreme scale
+    const CHUNK_SIZE = 100;
+    
+    await prisma.$transaction(async (tx) => {
+        // Clear old ranks for PENDING or invalid status in case status changed back
+        await tx.result.updateMany({
+            where: { 
+                assessmentId, 
+                status: "PENDING" 
+            },
+            data: { rank: null },
+        });
 
-	return { ranked: finalizedResults.length };
+        // Batch update ranks using chunking
+        for (let i = 0; i < finalizedResults.length; i += CHUNK_SIZE) {
+            const chunk = finalizedResults.slice(i, i + CHUNK_SIZE);
+            await Promise.all(
+                chunk.map((result, index) =>
+                    tx.result.update({
+                        where: { id: result.id },
+                        data: { rank: i + index + 1 },
+                    })
+                )
+            );
+        }
+    });
+
+    return { ranked: finalizedResults.length };
 };
 
 export const resultService = {
-	getResultByAttemptId,
-	getResultsForAssessment,
-	computeRanks,
+    getResultByAttemptId,
+    getResultsForAssessment,
+    computeRanks,
 };

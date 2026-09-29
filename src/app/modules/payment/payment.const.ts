@@ -3,11 +3,12 @@
  * FREE has no checkout flow; it's the default a company starts on.
  */
 export const PLAN_PRICING: Record<
-	"PRO" | "ENTERPRISE",
-	{ amountMinor: number; currency: string }
+  "FREE" | "PRO" | "ENTERPRISE",
+  { amountMinor: number; currency: string }
 > = {
-	PRO: { amountMinor: 2900, currency: "usd" },
-	ENTERPRISE: { amountMinor: 9900, currency: "usd" },
+  FREE: { amountMinor: 0, currency: "usd" },
+  PRO: { amountMinor: 2900, currency: "usd" },
+  ENTERPRISE: { amountMinor: 9900, currency: "usd" },
 };
 
 export const PAYMENT_SELECT = {

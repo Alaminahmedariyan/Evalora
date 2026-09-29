@@ -1,26 +1,26 @@
 import { z } from "zod";
 
 const registerCompanySchema = z.object({
-	name: z
-		.string()
-		.trim()
-		.min(2, "Company name must be at least 2 characters.")
-		.max(150, "Company name must be at most 150 characters."),
-	description: z
-		.string()
-		.trim()
-		.max(2000, "Description must be at most 2000 characters.")
-		.optional(),
-	website: z
-		.string()
-		.trim()
-		.url("Enter a valid website URL, e.g. https://example.com.")
-		.optional(),
-	industry: z
-		.string()
-		.trim()
-		.max(100, "Industry must be at most 100 characters.")
-		.optional(),
+  name: z
+    .string()
+    .trim()
+    .min(2, "Company name must be at least 2 characters.")
+    .max(150, "Company name must be at most 150 characters."),
+  description: z
+    .string()
+    .trim()
+    .max(2000, "Description must be at most 2000 characters.")
+    .optional(),
+  website: z
+    .string()
+    .trim()
+    .url("Enter a valid website URL, e.g. https://example.com.")
+    .optional(),
+  industry: z
+    .string()
+    .trim()
+    .max(100, "Industry must be at most 100 characters.")
+    .optional(),
 });
 
 /**
@@ -31,29 +31,30 @@ const registerCompanySchema = z.object({
  * can be added later if this is ever needed.
  */
 const updateCompanySchema = z.object({
-	description: z
-		.string()
-		.trim()
-		.max(2000, "Description must be at most 2000 characters.")
-		.optional(),
-	website: z
-		.string()
-		.trim()
-		.url("Enter a valid website URL, e.g. https://example.com.")
-		.optional(),
-	industry: z
-		.string()
-		.trim()
-		.max(100, "Industry must be at most 100 characters.")
-		.optional(),
+  description: z
+    .string()
+    .trim()
+    .max(2000, "Description must be at most 2000 characters.")
+    .optional(),
+  website: z
+    .string()
+    .trim()
+    .url("Enter a valid website URL, e.g. https://example.com.")
+    .optional(),
+  industry: z
+    .string()
+    .trim()
+    .max(100, "Industry must be at most 100 characters.")
+    .optional(),
 });
 
 export const companyValidation = {
-	registerCompanySchema,
-	updateCompanySchema,
-	updateSubscriptionSchema: z.object({
-		plan: z.enum(["FREE", "PRO", "ENTERPRISE"], {
-			message: "Plan must be one of FREE, PRO, or ENTERPRISE.",
-		}),
-	}),
+  registerCompanySchema,
+  updateCompanySchema,
+  updateSubscriptionSchema: z.object({
+    plan: z.literal("FREE", {
+      message:
+        "Only downgrading to FREE is allowed here — upgrade to a paid plan via checkout.",
+    }),
+  }),
 };

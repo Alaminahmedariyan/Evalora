@@ -105,7 +105,7 @@ const inviteCandidates = async (
 ) => {
 	// tenant-scoped via withTenantScope
 	const assessment = await prisma.assessment.findFirst({
-		where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId),
+		where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId) ?? {},
 	});
 
 	if (!assessment) {
@@ -205,7 +205,7 @@ const getInvitationsForAssessment = async (
 
 	// tenant-scoped via withTenantScope
 	const assessment = await prisma.assessment.findFirst({
-		where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId),
+		where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId) ?? {},
 	});
 
 	if (!assessment) {
@@ -363,7 +363,10 @@ const declineInvitation = async (id: string, userId: string, email: string) => {
 const cancelInvitation = async (id: string, companyId: string) => {
 	// tenant-scoped via relation filter
 	const invitation = await prisma.assessmentInvitation.findFirst({
-		where: { id, assessment: withTenantScope({ deletedAt: null }, companyId) },
+		where: {
+			id,
+			assessment: withTenantScope({ deletedAt: null }, companyId) ?? {},
+		},
 		include: { assessment: true },
 	});
 

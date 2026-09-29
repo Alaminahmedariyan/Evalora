@@ -1,3 +1,5 @@
+import type { SubscriptionPlan } from "../../../generated/prisma/enums";
+
 export type CreateCheckoutInput = {
-	plan: "PRO" | "ENTERPRISE";
+  plan: SubscriptionPlan;
 };

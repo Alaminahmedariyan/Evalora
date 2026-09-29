@@ -5,7 +5,7 @@ import { catchAsync } from "../../utils/catchAsync";
 import { paymentService } from "../payment/payment.service";
 
 /**
- * `req.body` here is a raw Buffer, not parsed JSON — this route is
+ * `req.body` here is a raw Buffer, not parsed JSON — this route i
  * mounted with `express.raw()` (see webhook.routes.ts) and, critically,
  * BEFORE `express.json()` in app.ts. Stripe's signature is computed over
  * the exact raw bytes; parsing the body first would make verification

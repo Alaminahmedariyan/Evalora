@@ -301,7 +301,28 @@ const getMySubscription = async (userId: string) => {
 		);
 	}
 
-	return company.subscription ?? { message: "No active subscription." };
+	if (!company.subscription) {
+		return { message: "No active subscription." };
+	}
+
+	// Lazy expiry — same pattern as AssessmentAttempt.expiresAt in
+	// attempt.service.ts. Checkout here is a one-time Stripe Payment, not a
+	// real Stripe Subscription, so nothing auto-renews; a paid plan simply
+	// lapses back to FREE once its 30-day currentPeriodEnd has passed and
+	// nobody has paid again.
+	if (
+		company.subscription.plan !== "FREE" &&
+		company.subscription.status === "ACTIVE" &&
+		company.subscription.currentPeriodEnd &&
+		company.subscription.currentPeriodEnd < new Date()
+	) {
+		return prisma.subscription.update({
+			where: { companyId: company.id },
+			data: { plan: "FREE", status: "EXPIRED" },
+		});
+	}
+
+	return company.subscription;
 };
 
 const updateMySubscription = async (
