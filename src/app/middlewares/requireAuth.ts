@@ -4,6 +4,7 @@ import { StatusCodes } from "http-status-codes";
 
 import type { UserRole } from "../../generated/prisma/enums";
 import { auth } from "../../lib/auth";
+import { prisma } from "../../lib/prisma";
 import AppError from "../errors/appError";
 import { catchAsync } from "../utils/catchAsync";
 
@@ -14,6 +15,7 @@ export type AuthenticatedUser = {
 	emailVerified: boolean;
 	image: string | null;
 	role: UserRole;
+	twoFactorEnabled?: boolean | null;
 	createdAt: Date;
 	updatedAt: Date;
 };
@@ -28,6 +30,20 @@ export const requireAuth = catchAsync(
 			throw new AppError(
 				StatusCodes.UNAUTHORIZED,
 				"You are not logged in. Please log in to access this resource.",
+			);
+		}
+
+		// A valid session is not enough: a suspended or deleted account must be
+		// locked out immediately, not whenever its session happens to expire.
+		const account = await prisma.user.findUnique({
+			where: { id: session.user.id },
+			select: { status: true, deletedAt: true },
+		});
+
+		if (!account || account.deletedAt || account.status === "SUSPENDED") {
+			throw new AppError(
+				StatusCodes.FORBIDDEN,
+				"This account is suspended or has been deleted.",
 			);
 		}
 

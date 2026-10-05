@@ -5,6 +5,10 @@ import { Prisma } from "../../generated/prisma/client";
 import { prisma } from "../../lib/prisma";
 import AppError from "../errors/appError";
 
+// Transient outcomes must never be replayed: the same key would keep returning
+// "too many requests" long after the limit window has passed.
+const NON_REPLAYABLE_STATUSES = new Set([408, 425, 429]);
+
 // TODO: Phase 9 (BullMQ) — purge expired rows via a scheduled job
 
 export const idempotency = () => {
@@ -53,6 +57,14 @@ export const idempotency = () => {
 
 		const now = new Date();
 
+		// Housekeeping: expired rows are never read again and there is no
+		// scheduled purge job yet, so now and then one request clears them.
+		if (Math.random() < 0.02) {
+			void prisma.idempotencyKey
+				.deleteMany({ where: { expiresAt: { lt: now } } })
+				.catch(() => undefined);
+		}
+
 		if (existing) {
 			if (existing.expiresAt > now) {
 				if (existing.requestHash === requestHash) {
@@ -60,6 +72,7 @@ export const idempotency = () => {
 					res.status(existing.statusCode).json(existing.response);
 					return;
 				}
+
 				throw new AppError(
 					StatusCodes.CONFLICT,
 					"Idempotency-Key already used with a different request body",
@@ -85,8 +98,12 @@ export const idempotency = () => {
 		const persist = async (body: unknown): Promise<Response> => {
 			const statusCode = res.statusCode;
 
-			// Do NOT persist 5xx errors or non-JSON-serializable responses.
-			if (statusCode < 500 && body !== undefined) {
+			// Do NOT persist 5xx errors, transient statuses or non-JSON responses.
+			if (
+				statusCode < 500 &&
+				!NON_REPLAYABLE_STATUSES.has(statusCode) &&
+				body !== undefined
+			) {
 				const endpointPath = `${req.method} ${req.baseUrl}${req.route?.path ?? req.path}`;
 				const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
@@ -115,6 +132,7 @@ export const idempotency = () => {
 						const replay = await prisma.idempotencyKey.findUnique({
 							where: { key_userId: { key, userId } },
 						});
+
 						if (replay && replay.requestHash === requestHash) {
 							if (!res.headersSent) {
 								res.setHeader("X-Idempotent-Replay", "true");

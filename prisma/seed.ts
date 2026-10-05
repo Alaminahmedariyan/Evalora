@@ -3,6 +3,7 @@ import "dotenv/config";
 import config from "../src/app/config";
 import { auth } from "../src/lib/auth";
 import { prisma } from "../src/lib/prisma";
+import { seedBlog } from "./seedBlog";
 
 async function ensureAdmin() {
 	const existing = await prisma.user.findUnique({
@@ -46,6 +47,13 @@ async function ensureAdmin() {
 async function main() {
 	console.log("🌱 Seeding admin...");
 	await ensureAdmin();
+
+	console.log("🌱 Seeding blog...");
+	const admin = await prisma.user.findUniqueOrThrow({
+		where: { email: config.superAdmin.email },
+	});
+	await seedBlog(admin.id);
+
 	console.log("🎉 Seed completed.");
 }
 

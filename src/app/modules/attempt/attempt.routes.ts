@@ -5,6 +5,7 @@ import { requireAuth, requireRole } from "../../middlewares/requireAuth";
 import { validateRequest } from "../../middlewares/validateRequest";
 import {
 	attemptSubmitLimiter,
+	proctoringEventLimiter,
 	submissionAnswerLimiter,
 } from "../../middlewares/rateLimiters";
 
@@ -29,10 +30,11 @@ router.get("/me", requireRole("CANDIDATE"), attemptController.getMyAttempts);
 // Owner candidate / owning recruiter / admin — enforced inside the service.
 router.get("/:id", attemptController.getAttemptById);
 
+// A PUT replaces the whole answer, so repeating it is already harmless;
+// storing an idempotency row for every autosave would only bloat the table.
 router.put(
 	"/:id/submissions/:problemId",
 	requireRole("CANDIDATE"),
-	idempotency(),
 	submissionAnswerLimiter,
 	validateRequest(attemptValidation.saveSubmissionSchema),
 	attemptController.saveSubmission,
@@ -49,14 +51,16 @@ router.post(
 router.post(
 	"/:id/proctoring-events",
 	requireRole("CANDIDATE"),
+	proctoringEventLimiter,
 	validateRequest(attemptValidation.proctoringEventSchema),
 	attemptController.recordProctoringEvent,
 );
 
 router.get("/:id/proctoring-events", attemptController.getProctoringEvents);
 
+// The controller reads both :id and :eventId — the old path had no :id.
 router.get(
-	"/proctoring-events/:eventId",
+	"/:id/proctoring-events/:eventId",
 	attemptController.getProctoringEventById,
 );
 

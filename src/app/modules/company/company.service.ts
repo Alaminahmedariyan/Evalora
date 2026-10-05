@@ -16,6 +16,7 @@ import type {
 	RegisterCompanyInput,
 	UpdateCompanyInput,
 } from "./company.interface";
+import { getPlanSnapshot } from "../../utils/planLimits";
 
 const companyQueryBuilder = new QueryBuilder<
 	Prisma.CompanyGetPayload<{ select: typeof COMPANY_LIST_SELECT }>,
@@ -305,30 +306,38 @@ const getMySubscription = async (userId: string) => {
 		return { message: "No active subscription." };
 	}
 
-	// Lazy expiry — same pattern as AssessmentAttempt.expiresAt in
-	// attempt.service.ts. Checkout here is a one-time Stripe Payment, not a
-	// real Stripe Subscription, so nothing auto-renews; a paid plan simply
-	// lapses back to FREE once its 30-day currentPeriodEnd has passed and
-	// nobody has paid again.
+	let subscription = company.subscription;
+
+	// Lazy expiry — a paid plan lapses back to FREE once its 30-day
+	// currentPeriodEnd has passed and nobody has paid again.
 	if (
-		company.subscription.plan !== "FREE" &&
-		company.subscription.status === "ACTIVE" &&
-		company.subscription.currentPeriodEnd &&
-		company.subscription.currentPeriodEnd < new Date()
+		subscription.plan !== "FREE" &&
+		subscription.status === "ACTIVE" &&
+		subscription.currentPeriodEnd &&
+		subscription.currentPeriodEnd < new Date()
 	) {
-		return prisma.subscription.update({
+		subscription = await prisma.subscription.update({
 			where: { companyId: company.id },
 			data: { plan: "FREE", status: "EXPIRED" },
 		});
 	}
 
-	return company.subscription;
+	const snapshot = await getPlanSnapshot(company.id);
+
+	return { ...subscription, ...snapshot };
 };
 
 const updateMySubscription = async (
 	userId: string,
 	plan: "FREE" | "PRO" | "ENTERPRISE",
 ) => {
+	if (plan !== "FREE") {
+		throw new AppError(
+			StatusCodes.BAD_REQUEST,
+			"Paid plans can only be activated through checkout.",
+		);
+	}
+
 	const company = await prisma.company.findFirst({
 		where: { ownerId: userId, deletedAt: null },
 	});
@@ -340,27 +349,18 @@ const updateMySubscription = async (
 		);
 	}
 
-	const periodEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-
-	const subscription = await prisma.subscription.upsert({
+	return prisma.subscription.upsert({
 		where: { companyId: company.id },
 		update: {
-			plan,
+			plan: "FREE",
 			status: "ACTIVE",
-			currentPeriodStart: new Date(),
-			currentPeriodEnd: periodEnd,
+			currentPeriodStart: null,
+			currentPeriodEnd: null,
 			cancelAtPeriodEnd: false,
+			cancelledAt: null,
 		},
-		create: {
-			companyId: company.id,
-			plan,
-			status: "ACTIVE",
-			currentPeriodStart: new Date(),
-			currentPeriodEnd: periodEnd,
-		},
+		create: { companyId: company.id, plan: "FREE", status: "ACTIVE" },
 	});
-
-	return subscription;
 };
 
 const cancelMySubscription = async (userId: string) => {

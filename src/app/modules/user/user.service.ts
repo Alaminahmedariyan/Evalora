@@ -237,6 +237,11 @@ const updateStatus = async (
 		},
 	});
 
+	// Suspending must take effect now, not when the session expires.
+	if (status === "SUSPENDED") {
+		await prisma.session.deleteMany({ where: { userId: id } });
+	}
+
 	return updatedUser;
 };
 
@@ -266,6 +271,8 @@ const softDeleteUser = async (id: string, actorId: string) => {
 			status: "SUSPENDED",
 		},
 	});
+
+	await prisma.session.deleteMany({ where: { userId: id } });
 
 	return {
 		message: "User deleted successfully.",

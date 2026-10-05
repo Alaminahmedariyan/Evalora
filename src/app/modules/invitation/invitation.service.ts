@@ -14,6 +14,8 @@ import { withTenantScope } from "../../../lib/prismaTenantScope";
 import AppError from "../../errors/appError";
 import { QueryBuilder } from "../../queryBuilder";
 import type { PrismaDelegate } from "../../queryBuilder/types";
+import { escapeHtml } from "../../utils/escapeHtml";
+import { assertCanInvite } from "../../utils/planLimits";
 import { sendEmail } from "../../utils/sendEmail";
 
 import { INVITATION_SELECT } from "./invitation.const";
@@ -25,7 +27,7 @@ const generateInvitationToken = () =>
 const invitationEmailTemplate = (assessmentTitle: string, expiresAt: Date) => `
 	<div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; color: #111;">
 		<h2>You've been invited to an assessment</h2>
-		<p>You've been invited to take the assessment: <strong>${assessmentTitle}</strong>.</p>
+		<p>You've been invited to take the assessment: <strong>${escapeHtml(assessmentTitle)}</strong>.</p>
 		<p>Log in to your account and check your invitations to accept and start.</p>
 		<p style="font-size: 13px; color: #666;">This invitation expires on ${expiresAt.toDateString()}.</p>
 	</div>
@@ -138,6 +140,8 @@ const inviteCandidates = async (
 		return { invited: 0, skipped: uniqueEmails.length, invitations: [] };
 	}
 
+	await assertCanInvite(companyId, emailsToInvite.length);
+
 	// Only auto-link to CANDIDATE accounts — an email that happens to match
 	// a recruiter/admin shouldn't silently become "invited as a candidate".
 	const matchingCandidates = await prisma.user.findMany({
@@ -174,7 +178,7 @@ const inviteCandidates = async (
 
 	// Best-effort — a failed email send shouldn't roll back invitations that
 	// were already committed to the database.
-	await Promise.all(
+	await Promise.allSettled(
 		created.map((invitation) =>
 			sendEmail({
 				to: invitation.email,

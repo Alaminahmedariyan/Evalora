@@ -3,7 +3,7 @@ import { Router } from "express";
 import { requireAuth, requireRole } from "../../middlewares/requireAuth";
 import { imageUpload } from "../../middlewares/upload";
 import { validateRequest } from "../../middlewares/validateRequest";
-import { validateRequestWithFile } from "../../middlewares/validateRequest2";
+import { validateRequestWithFile } from "../../middlewares/validateRequestWithFile";
 
 import { companyController } from "./company.controller";
 import { companyValidation } from "./company.validation";
@@ -13,10 +13,10 @@ const router = Router();
 // Any authenticated user can register a company — doing so promotes them
 // to RECRUITER (see company.service.ts#registerCompany).
 router.post(
-	"/register",
-	requireAuth,
-	validateRequest(companyValidation.registerCompanySchema),
-	companyController.registerCompany,
+  "/register",
+  requireAuth,
+  validateRequest(companyValidation.registerCompanySchema),
+  companyController.registerCompany,
 );
 
 // Public browse — no requireAuth. Anonymous/candidate visitors only see
@@ -27,21 +27,21 @@ router.get("/", companyController.getAllCompanies);
 router.get("/me", requireAuth, companyController.getMyCompany);
 
 router.patch(
-	"/me",
-	requireAuth,
-	requireRole("RECRUITER"),
-	imageUpload.single("logo"),
-	validateRequestWithFile(companyValidation.updateCompanySchema),
-	companyController.updateMyCompany,
+  "/me",
+  requireAuth,
+  requireRole("RECRUITER"),
+  imageUpload.single("logo"),
+  validateRequestWithFile(companyValidation.updateCompanySchema),
+  companyController.updateMyCompany,
 );
 
 router.get("/:id", companyController.getCompanyById);
 
 router.patch(
-	"/:id/verify",
-	requireAuth,
-	requireRole("ADMIN"),
-	companyController.verifyCompany,
+  "/:id/verify",
+  requireAuth,
+  requireRole("ADMIN"),
+  companyController.verifyCompany,
 );
 
 // Owner-or-Admin check happens inside the service, not here, since "owner"
@@ -49,25 +49,25 @@ router.patch(
 router.delete("/:id", requireAuth, companyController.deleteCompany);
 
 router.get(
-	"/me/subscription",
-	requireAuth,
-	requireRole("RECRUITER"),
-	companyController.getMySubscription,
+  "/me/subscription",
+  requireAuth,
+  requireRole("RECRUITER"),
+  companyController.getMySubscription,
 );
 
 router.patch(
-	"/me/subscription",
-	requireAuth,
-	requireRole("RECRUITER"),
-	validateRequest(companyValidation.updateSubscriptionSchema),
-	companyController.updateMySubscription,
+  "/me/subscription",
+  requireAuth,
+  requireRole("RECRUITER"),
+  validateRequest(companyValidation.updateSubscriptionSchema),
+  companyController.updateMySubscription,
 );
 
 router.post(
-	"/me/subscription/cancel",
-	requireAuth,
-	requireRole("RECRUITER"),
-	companyController.cancelMySubscription,
+  "/me/subscription/cancel",
+  requireAuth,
+  requireRole("RECRUITER"),
+  companyController.cancelMySubscription,
 );
 
 export const companyRoutes = router;

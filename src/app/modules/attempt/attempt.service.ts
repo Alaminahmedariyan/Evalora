@@ -209,8 +209,9 @@ const startAttempt = async (candidateId: string, assessmentId: string) => {
 /**
  * Saves (creates or overwrites) the candidate's answer for one problem.
  * Can be called repeatedly while the attempt is IN_PROGRESS — each call
- * fully replaces the previous answer for that problem, which is exactly
- * the "autosave as they work" behaviour a real exam UI needs.
+ * fully replaces the previous answer for that problem. An empty answer
+ * (nothing selected, blank code, blank text) removes the stored submission,
+ * so a cleared answer is treated exactly like one never given.
  */
 const saveSubmission = async (
 	attemptId: string,
@@ -262,57 +263,74 @@ const saveSubmission = async (
 
 	const { problem } = assessmentProblem;
 	let selectedOptionIds: string[] = [];
+	let isEmpty = false;
 
 	if (problem.type === "MCQ") {
-		if (!payload.selectedOptionIds || payload.selectedOptionIds.length === 0) {
+		if (payload.selectedOptionIds === undefined) {
 			throw new AppError(
 				StatusCodes.BAD_REQUEST,
 				"selectedOptionIds is required for an MCQ problem.",
 			);
 		}
 
-		const mcqProblem = await prisma.mcqProblem.findUniqueOrThrow({
-			where: { problemId },
-			include: { options: { select: { id: true } } },
-		});
-
-		const validOptionIds = new Set(
-			mcqProblem.options.map((option) => option.id),
-		);
-		const hasInvalidOption = payload.selectedOptionIds.some(
-			(id) => !validOptionIds.has(id),
-		);
-
-		if (hasInvalidOption) {
-			throw new AppError(
-				StatusCodes.BAD_REQUEST,
-				"One or more selected options do not belong to this problem.",
-			);
-		}
-
-		if (
-			mcqProblem.type === "SINGLE_CHOICE" &&
-			payload.selectedOptionIds.length > 1
-		) {
-			throw new AppError(
-				StatusCodes.BAD_REQUEST,
-				"This is a single-choice question — select only one option.",
-			);
-		}
-
 		selectedOptionIds = payload.selectedOptionIds;
+		isEmpty = selectedOptionIds.length === 0;
+
+		if (!isEmpty) {
+			const mcqProblem = await prisma.mcqProblem.findUniqueOrThrow({
+				where: { problemId },
+				include: { options: { select: { id: true } } },
+			});
+
+			const validOptionIds = new Set(
+				mcqProblem.options.map((option) => option.id),
+			);
+			const hasInvalidOption = selectedOptionIds.some(
+				(id) => !validOptionIds.has(id),
+			);
+
+			if (hasInvalidOption) {
+				throw new AppError(
+					StatusCodes.BAD_REQUEST,
+					"One or more selected options do not belong to this problem.",
+				);
+			}
+
+			if (
+				mcqProblem.type === "SINGLE_CHOICE" &&
+				selectedOptionIds.length > 1
+			) {
+				throw new AppError(
+					StatusCodes.BAD_REQUEST,
+					"This is a single-choice question — select only one option.",
+				);
+			}
+		}
 	} else if (problem.type === "CODING") {
-		if (!payload.code) {
+		if (payload.code === undefined) {
 			throw new AppError(
 				StatusCodes.BAD_REQUEST,
 				"code is required for a CODING problem.",
 			);
 		}
-	} else if (!payload.answerText) {
-		throw new AppError(
-			StatusCodes.BAD_REQUEST,
-			"answerText is required for a WRITTEN problem.",
-		);
+
+		isEmpty = payload.code.trim() === "";
+	} else {
+		if (payload.answerText === undefined) {
+			throw new AppError(
+				StatusCodes.BAD_REQUEST,
+				"answerText is required for a WRITTEN problem.",
+			);
+		}
+
+		isEmpty = payload.answerText.trim() === "";
+	}
+
+	if (isEmpty) {
+		// Answers, evaluations and test-case results all cascade from the
+		// submission, and none exist yet while the attempt is IN_PROGRESS.
+		await prisma.submission.deleteMany({ where: { attemptId, problemId } });
+		return null;
 	}
 
 	const submission = await prisma.submission.upsert({

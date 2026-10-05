@@ -86,8 +86,9 @@ export const auth = betterAuth({
 
 	advanced: {
 		useSecureCookies: config.app.env === "production",
+
 		defaultCookieAttributes: {
-			sameSite: config.app.env === "production" ? "none" : "lax",
+			sameSite: "lax",
 			secure: config.app.env === "production",
 		},
 	},
@@ -106,14 +107,23 @@ export const auth = betterAuth({
 			overrideDefaultEmailVerification: true,
 
 			sendVerificationOTP: async ({ email, otp, type }) => {
-				const user = await prisma.user.findUnique({ where: { email } });
+				const user = await prisma.user.findUnique({
+					where: { email },
+				});
+
 				const name = user?.name ?? "there";
 
 				const subjectAndPurpose =
 					type === "sign-in"
-						? { subject: "Your sign-in code", purpose: "sign in" }
+						? {
+								subject: "Your sign-in code",
+								purpose: "sign in",
+							}
 						: type === "email-verification"
-							? { subject: "Verify your email", purpose: "verify your email" }
+							? {
+									subject: "Verify your email",
+									purpose: "verify your email",
+								}
 							: {
 									subject: "Reset your password",
 									purpose: "reset your password",
@@ -128,7 +138,12 @@ export const auth = betterAuth({
 				await sendEmailSmtp({
 					to: email,
 					subject: subjectAndPurpose.subject,
-					html: otpEmailTemplate(name, otp, 5, subjectAndPurpose.purpose),
+					html: otpEmailTemplate(
+						name,
+						otp,
+						5,
+						subjectAndPurpose.purpose,
+					),
 				});
 			},
 		}),
@@ -141,6 +156,7 @@ export const auth = betterAuth({
 		before: createAuthMiddleware(async (ctx) => {
 			if (ctx.path === "/sign-in/email") {
 				const email = ctx.body?.email as string | undefined;
+
 				if (email && (await isLocked(email))) {
 					throw new APIError("TOO_MANY_REQUESTS", {
 						message:
@@ -153,9 +169,11 @@ export const auth = betterAuth({
 		after: createAuthMiddleware(async (ctx) => {
 			if (ctx.path === "/sign-in/email") {
 				const email = ctx.body?.email as string | undefined;
+
 				const returned = ctx.context.returned as
 					| { status?: number }
 					| undefined;
+
 				const failed = Boolean(
 					returned &&
 						typeof returned === "object" &&
@@ -179,9 +197,62 @@ export const auth = betterAuth({
 	// (Google/GitHub) signup, since both create a User row the same way
 	// --------------------------------------------------------------
 	databaseHooks: {
+		session: {
+			create: {
+				// Stops a suspended or deleted account from getting a new session.
+				before: async (session) => {
+					const account = await prisma.user.findUnique({
+						where: { id: session.userId },
+						select: {
+							status: true,
+							deletedAt: true,
+						},
+					});
+
+					if (
+						!account ||
+						account.deletedAt ||
+						account.status === "SUSPENDED"
+					) {
+						throw new APIError("FORBIDDEN", {
+							message:
+								"This account is suspended or has been deleted. Please contact us if you think this is a mistake.",
+						});
+					}
+				},
+			},
+		},
+
 		user: {
 			create: {
 				after: async (user) => {
+					// Every new account accepted the Terms and Privacy Policy:
+					// email sign-ups through the required checkbox, social sign-ins
+					// through the "by continuing" notice on the login page.
+					// Never block sign-up if recording fails.
+					try {
+						await prisma.userConsent.createMany({
+							data: [
+								{
+									userId: user.id,
+									consentType: "TERMS_OF_SERVICE",
+									granted: true,
+								},
+								{
+									userId: user.id,
+									consentType: "PRIVACY_POLICY",
+									granted: true,
+								},
+							],
+							skipDuplicates: true,
+						});
+					} catch (error) {
+						console.error(
+							"[Auth] Failed to record sign-up consents:",
+							error,
+						);
+					}
+
 					await sendEmailSmtp({
 						to: user.email,
 						subject: `Welcome, ${user.name}!`,

@@ -1,26 +1,40 @@
 import { toNodeHandler } from "better-auth/node";
+
 import cookieParser from "cookie-parser";
+
 import cors from "cors";
+
 import express, {
 	type Application,
 	type NextFunction,
 	type Request,
 	type Response,
 } from "express";
+
 import helmet from "helmet";
 
 import config from "./app/config";
+
 import { forceHttps } from "./app/middlewares/forceHttps";
+
 import { globalErrorHandler } from "./app/middlewares/globalErrorHandler";
+
 import { notFound } from "./app/middlewares/notFound";
+
 import {
 	authRateLimiter,
 	generalRateLimiter,
+	twoFactorLimiter,
 } from "./app/middlewares/rateLimiters";
+
 import { sanitizeBody } from "./app/middlewares/sanitizeBody";
+
 import { webhookRoutes } from "./app/modules/webhook/webhook.routes";
+
 import { globalRoutes } from "./app/routes";
+
 import { auth } from "./lib/auth";
+
 import { prisma } from "./lib/prisma";
 
 const app: Application = express();
@@ -35,11 +49,13 @@ app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 
 app.use((req: Request, res: Response, next: NextFunction) => {
 	const startedAt = Date.now();
+
 	res.on("finish", () => {
 		console.log(
 			`${req.method} ${req.originalUrl} ${res.statusCode} ${Date.now() - startedAt}ms`,
 		);
 	});
+
 	next();
 });
 
@@ -62,63 +78,81 @@ app.use(
 	}),
 );
 
-// Stripe webhook needs raw body — must stay BEFORE express.json()
 app.use("/api/v1/webhooks", webhookRoutes);
 
-// Auth-specific rate limiting — mounted BEFORE the Better Auth catch-all below
 app.use("/api/auth/sign-in", authRateLimiter);
 app.use("/api/auth/sign-up", authRateLimiter);
 app.use("/api/auth/forget-password", authRateLimiter);
 app.use("/api/auth/email-otp", authRateLimiter);
+app.use("/api/auth/two-factor", twoFactorLimiter);
 
 if (config.app.env !== "production") {
-	app.use("/api/auth", (req: Request, _res: Response, next: NextFunction) => {
-		if (!req.headers.origin) {
-			req.headers.origin = "http://localhost:3000";
-		}
-		next();
-	});
+	app.use(
+		"/api/auth",
+		(req: Request, _res: Response, next: NextFunction) => {
+			if (!req.headers.origin) {
+				req.headers.origin = "http://localhost:3000";
+			}
+			next();
+		},
+	);
 }
 
 app.all("/api/auth/*splat", toNodeHandler(auth));
 
 app.use(express.json({ limit: "10mb" }));
+
 app.use(sanitizeBody);
+
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
 app.use(cookieParser());
 
 app.use((_req, res, next) => {
 	const originalJson = res.json.bind(res);
+
 	res.json = (body) => {
 		const json = JSON.stringify(body, (_key, value) =>
 			typeof value === "bigint" ? Number(value) : value,
 		);
+
 		res.setHeader("Content-Type", "application/json");
+
 		return res.send(json);
 	};
+
 	next();
 });
 
 app.get("/", (_req: Request, res: Response) => {
-	res.status(200).json({ success: true, message: "Evalora API is running." });
+	res.status(200).json({
+		success: true,
+		message: "Evalora API is running.",
+	});
 });
 
 app.get("/health", async (_req: Request, res: Response) => {
 	try {
 		await prisma.$queryRaw`SELECT 1`;
-		res
-			.status(200)
-			.json({ success: true, status: "healthy", database: "connected" });
+
+		res.status(200).json({
+			success: true,
+			status: "healthy",
+			database: "connected",
+		});
 	} catch {
-		res
-			.status(503)
-			.json({ success: false, status: "unhealthy", database: "disconnected" });
+		res.status(503).json({
+			success: false,
+			status: "unhealthy",
+			database: "disconnected",
+		});
 	}
 });
 
 app.use("/api/v1", generalRateLimiter, globalRoutes);
 
 app.use(notFound);
+
 app.use(globalErrorHandler);
 
 export default app;

@@ -35,6 +35,7 @@ export const ATTEMPT_DETAIL_SELECT = {
 	id: true,
 	assessmentId: true,
 	candidateId: true,
+	candidate: { select: { id: true, name: true, email: true } },
 	attemptNumber: true,
 	status: true,
 	startedAt: true,

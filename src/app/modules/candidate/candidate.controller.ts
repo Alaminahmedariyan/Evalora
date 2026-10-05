@@ -36,8 +36,11 @@ const getMyProfile = catchAsync(async (req: Request, res: Response) => {
 
 const getCandidateProfileById = catchAsync(
 	async (req: Request, res: Response) => {
+		const currentUser = req.user as AuthenticatedUser;
+
 		const profile = await candidateService.getCandidateProfileById(
 			req.params.id as string,
+			currentUser.role,
 		);
 
 		res.status(StatusCodes.OK).json({
@@ -49,8 +52,11 @@ const getCandidateProfileById = catchAsync(
 );
 
 const getAllCandidates = catchAsync(async (req: Request, res: Response) => {
+	const currentUser = req.user as AuthenticatedUser;
+
 	const result = await candidateService.getAllCandidates(
 		req.query as Record<string, unknown>,
+		currentUser.role,
 	);
 
 	res.status(StatusCodes.OK).json({

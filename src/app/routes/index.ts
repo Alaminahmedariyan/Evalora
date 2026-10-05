@@ -13,28 +13,32 @@ import { paymentRoutes } from "../modules/payment/payment.routes";
 import { problemRoutes } from "../modules/problem/problem.routes";
 import { resultRoutes } from "../modules/result/result.routes";
 import { userRoutes } from "../modules/user/user.routes";
+import { blogRoutes } from "../modules/blog/blog.routes";
+import { contactRoutes } from "../modules/contact/contact.routes";
 
 const router = Router();
 
 const moduleRoutes = [
-	{ path: "/auth", route: authRoutes },
-	{ path: "/users", route: userRoutes },
-	{ path: "/companies", route: companyRoutes },
-	{ path: "/candidates", route: candidateRoutes },
-	{ path: "/problems", route: problemRoutes },
-	{ path: "/assessments", route: assessmentRoutes },
-	{ path: "/invitations", route: invitationRoutes },
-	{ path: "/attempts", route: attemptRoutes },
-	{ path: "/evaluations", route: evaluationRoutes },
-	{ path: "/results", route: resultRoutes },
-	{ path: "/payments", route: paymentRoutes },
-	{ path: "/notifications", route: notificationRoutes },
-	{ path: "/admin", route: adminRoutes },
-	{ path: "/consents", route: consentRoutes },
+  { path: "/auth", route: authRoutes },
+  { path: "/users", route: userRoutes },
+  { path: "/companies", route: companyRoutes },
+  { path: "/candidates", route: candidateRoutes },
+  { path: "/problems", route: problemRoutes },
+  { path: "/assessments", route: assessmentRoutes },
+  { path: "/invitations", route: invitationRoutes },
+  { path: "/attempts", route: attemptRoutes },
+  { path: "/evaluations", route: evaluationRoutes },
+  { path: "/results", route: resultRoutes },
+  { path: "/payments", route: paymentRoutes },
+  { path: "/notifications", route: notificationRoutes },
+  { path: "/admin", route: adminRoutes },
+  { path: "/consents", route: consentRoutes },
+  { path: "/blog", route: blogRoutes },
+  { path: "/contact", route: contactRoutes },
 ];
 
 for (const { path, route } of moduleRoutes) {
-	router.use(path, route);
+  router.use(path, route);
 }
 
 export const globalRoutes = router;

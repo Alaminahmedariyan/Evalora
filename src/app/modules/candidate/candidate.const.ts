@@ -1,6 +1,7 @@
 /**
- * Nested `user` select is safe inside a flat `select` block (not `include`)
- * because CandidateProfile -> User is a to-one relation.
+ * What recruiters and admins see. Nested `user` select is safe inside a
+ * flat `select` block (not `include`) because CandidateProfile -> User is a
+ * to-one relation.
  */
 export const CANDIDATE_DETAIL_SELECT = {
 	id: true,
@@ -24,4 +25,10 @@ export const CANDIDATE_DETAIL_SELECT = {
 			image: true,
 		},
 	},
+} as const;
+
+/** The candidate's own view: the same fields plus their visibility setting. */
+export const CANDIDATE_OWN_SELECT = {
+	...CANDIDATE_DETAIL_SELECT,
+	isVisibleToRecruiters: true,
 } as const;

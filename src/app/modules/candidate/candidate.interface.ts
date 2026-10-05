@@ -1,11 +1,13 @@
+// null means "clear this field"; leaving a key out means "don't touch it".
 export type UpsertCandidateProfileInput = Partial<{
-	headline: string;
-	bio: string;
-	phone: string;
-	location: string;
-	linkedinUrl: string;
-	githubUrl: string;
-	portfolioUrl: string;
+	headline: string | null;
+	bio: string | null;
+	phone: string | null;
+	location: string | null;
+	linkedinUrl: string | null;
+	githubUrl: string | null;
+	portfolioUrl: string | null;
 	skills: string[];
-	experienceYears: number;
+	experienceYears: number | null;
+	isVisibleToRecruiters: boolean;
 }>;

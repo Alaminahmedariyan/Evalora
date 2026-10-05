@@ -17,6 +17,7 @@ import type {
 	CreateAssessmentInput,
 	UpdateAssessmentInput,
 } from "./assessment.interface";
+import { assertCanCreateAssessment } from "../../utils/planLimits";
 
 const assessmentQueryBuilder = new QueryBuilder<
 	Prisma.AssessmentGetPayload<{ select: typeof ASSESSMENT_LIST_SELECT }>,
@@ -68,6 +69,8 @@ const createAssessment = async (
 	createdById: string,
 	payload: CreateAssessmentInput,
 ) => {
+	await assertCanCreateAssessment(companyId);
+
 	await assertProblemsBelongToCompany(
 		companyId,
 		payload.problems.map((problem) => problem.problemId),

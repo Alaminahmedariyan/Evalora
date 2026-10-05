@@ -1,5 +1,6 @@
 import { StatusCodes } from "http-status-codes";
 
+import type { UserRole } from "../../../generated/prisma/enums";
 import type { CandidateProfileWhereInput } from "../../../generated/prisma/models/CandidateProfile";
 
 import { prisma } from "../../../lib/prisma";
@@ -7,7 +8,10 @@ import AppError from "../../errors/appError";
 import { QueryBuilder } from "../../queryBuilder";
 import type { PrismaDelegate } from "../../queryBuilder/types";
 import { uploadFileToCloudinary } from "../../utils/fileUploader";
-import { CANDIDATE_DETAIL_SELECT } from "./candidate.const";
+import {
+	CANDIDATE_DETAIL_SELECT,
+	CANDIDATE_OWN_SELECT,
+} from "./candidate.const";
 import type { UpsertCandidateProfileInput } from "./candidate.interface";
 
 /**
@@ -56,10 +60,24 @@ const candidateQueryBuilder = new QueryBuilder<
 		},
 		sortableFields: ["createdAt", "updatedAt", "experienceYears"],
 		selectableFields: Object.keys(CANDIDATE_DETAIL_SELECT),
+		defaultSelect: CANDIDATE_DETAIL_SELECT,
 		softDelete: true,
 		defaultSortField: "createdAt",
 	},
 );
+
+/**
+ * Recruiters only ever see profiles the candidate chose to share, and only
+ * for accounts that are still active. Admins see everything (moderation).
+ * A hidden profile looks exactly like a missing one, so nothing leaks.
+ */
+const visibleTo = (role: UserRole): CandidateProfileWhereInput =>
+	role === "ADMIN"
+		? {}
+		: {
+				isVisibleToRecruiters: true,
+				user: { deletedAt: null, status: "ACTIVE" },
+			};
 
 const upsertMyProfile = async (
 	userId: string,
@@ -95,14 +113,14 @@ const upsertMyProfile = async (
 			...payload,
 			...(resumeUrl ? { resumeUrl } : {}),
 		},
-		select: CANDIDATE_DETAIL_SELECT,
+		select: CANDIDATE_OWN_SELECT,
 	});
 };
 
 const getMyProfile = async (userId: string) => {
 	const profile = await prisma.candidateProfile.findFirst({
 		where: { userId, deletedAt: null },
-		select: CANDIDATE_DETAIL_SELECT,
+		select: CANDIDATE_OWN_SELECT,
 	});
 
 	if (!profile) {
@@ -112,9 +130,9 @@ const getMyProfile = async (userId: string) => {
 	return profile;
 };
 
-const getCandidateProfileById = async (id: string) => {
+const getCandidateProfileById = async (id: string, requesterRole: UserRole) => {
 	const profile = await prisma.candidateProfile.findFirst({
-		where: { id, deletedAt: null },
+		where: { id, deletedAt: null, ...visibleTo(requesterRole) },
 		select: CANDIDATE_DETAIL_SELECT,
 	});
 
@@ -125,8 +143,11 @@ const getCandidateProfileById = async (id: string) => {
 	return profile;
 };
 
-const getAllCandidates = async (query: Record<string, unknown>) => {
-	return candidateQueryBuilder.execute(query);
+const getAllCandidates = async (
+	query: Record<string, unknown>,
+	requesterRole: UserRole,
+) => {
+	return candidateQueryBuilder.execute(query, visibleTo(requesterRole));
 };
 
 export const candidateService = {

@@ -4,17 +4,9 @@ const startAttemptSchema = z.object({
 	assessmentId: z.string().min(1, "assessmentId is required."),
 });
 
-/**
- * There's no "type" discriminant field here on purpose — the client
- * already knows a problem's type from the attempt detail response, and
- * the server re-derives it from the DB anyway (never trusts the client's
- * idea of problem type). This schema is just a sanity check that *some*
- * answer was sent; attempt.service.ts enforces the right field for the
- * problem's actual type.
- */
 const saveSubmissionSchema = z
 	.object({
-		selectedOptionIds: z.array(z.string().min(1)).min(1).max(10).optional(),
+		selectedOptionIds: z.array(z.string().min(1)).max(10).optional(),
 		code: z.string().max(20000).optional(),
 		language: z.string().trim().max(50).optional(),
 		answerText: z.string().trim().max(20000).optional(),
@@ -61,7 +53,13 @@ const proctoringEventSchema = z.object({
 		"WINDOW_FOCUS",
 		"OTHER",
 	]),
-	metadata: z.record(z.string(), z.unknown()).optional(),
+	metadata: z
+		.record(z.string(), z.unknown())
+		.refine(
+			(value) => JSON.stringify(value).length <= 2000,
+			"Metadata is too large.",
+		)
+		.optional(),
 });
 
 export const attemptValidation = {

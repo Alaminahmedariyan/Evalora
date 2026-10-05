@@ -5,18 +5,7 @@ import AppError from "../errors/appError";
 
 const storage = multer.memoryStorage();
 
-const IMAGE_MIME_TYPES = [
-	"image/jpeg",
-	"image/jpg",
-	"image/pjpeg",
-	"image/x-png",
-	"image/png",
-	"image/webp",
-	"image/svg+xml",
-	"image/gif",
-	"image/bmp",
-	"image/tiff",
-];
+const IMAGE_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 const DOCUMENT_MIME_TYPES = [
 	"application/pdf",
 	"application/msword",
@@ -34,6 +23,15 @@ const makeUploader = (
 		storage,
 		limits: { fileSize: maxSizeBytes },
 		fileFilter: (_req, file, cb) => {
+			if (!allowedMimeTypes.includes(file.mimetype)) {
+				cb(
+					new AppError(
+						StatusCodes.BAD_REQUEST,
+						`Only ${label} files are allowed.`,
+					),
+				);
+				return;
+			}
 			cb(null, true);
 		},
 	});
