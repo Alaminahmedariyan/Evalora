@@ -4,64 +4,76 @@ import config from "../src/app/config";
 import { auth } from "../src/lib/auth";
 import { prisma } from "../src/lib/prisma";
 import { seedBlog } from "./seedBlog";
+import { seedDemo } from "./seedDemo";
 
 async function ensureAdmin() {
-	const existing = await prisma.user.findUnique({
-		where: { email: config.superAdmin.email },
-	});
+    const existing = await prisma.user.findUnique({
+        where: { email: config.superAdmin.email },
+    });
 
-	if (existing) {
-		await prisma.user.update({
-			where: { id: existing.id },
-			data: {
-				role: "ADMIN",
-				status: "ACTIVE",
-				emailVerified: true,
-				...(config.superAdmin.name ? { name: config.superAdmin.name } : {}),
-			},
-		});
-		console.log(`✅ Admin ensured: ${existing.email}`);
-		return;
-	}
+    if (existing) {
+        await prisma.user.update({
+            where: { id: existing.id },
+            data: {
+                role: "ADMIN",
+                status: "ACTIVE",
+                emailVerified: true,
+                ...(config.superAdmin.name
+                    ? { name: config.superAdmin.name }
+                    : {}),
+            },
+        });
 
-	await auth.api.signUpEmail({
-		body: {
-			name: config.superAdmin.name ?? "Super Admin",
-			email: config.superAdmin.email,
-			password: config.superAdmin.password,
-		},
-	});
+        console.log(`✅ Admin ensured: ${existing.email}`);
+        return;
+    }
 
-	const user = await prisma.user.findUniqueOrThrow({
-		where: { email: config.superAdmin.email },
-	});
+    await auth.api.signUpEmail({
+        body: {
+            name: config.superAdmin.name ?? "Super Admin",
+            email: config.superAdmin.email,
+            password: config.superAdmin.password,
+        },
+    });
 
-	await prisma.user.update({
-		where: { id: user.id },
-		data: { role: "ADMIN", status: "ACTIVE", emailVerified: true },
-	});
+    const user = await prisma.user.findUniqueOrThrow({
+        where: { email: config.superAdmin.email },
+    });
 
-	console.log(`✅ Admin created: ${user.email}`);
+    await prisma.user.update({
+        where: { id: user.id },
+        data: {
+            role: "ADMIN",
+            status: "ACTIVE",
+            emailVerified: true,
+        },
+    });
+
+    console.log(`✅ Admin created: ${user.email}`);
 }
 
 async function main() {
-	console.log("🌱 Seeding admin...");
-	await ensureAdmin();
+    console.log("🌱 Seeding admin...");
+    await ensureAdmin();
 
-	console.log("🌱 Seeding blog...");
-	const admin = await prisma.user.findUniqueOrThrow({
-		where: { email: config.superAdmin.email },
-	});
-	await seedBlog(admin.id);
+    const admin = await prisma.user.findUniqueOrThrow({
+        where: { email: config.superAdmin.email },
+    });
 
-	console.log("🎉 Seed completed.");
+    console.log("🌱 Seeding blog...");
+    await seedBlog(admin.id);
+
+    console.log("🌱 Seeding demo data...");
+    await seedDemo();
+
+    console.log("🎉 Seed completed.");
 }
 
 main()
-	.catch((error) => {
-		console.error("❌ Seed failed:", error);
-		process.exitCode = 1;
-	})
-	.finally(async () => {
-		await prisma.$disconnect();
-	});
+    .catch((error) => {
+        console.error("❌ Seed failed:", error);
+        process.exitCode = 1;
+    })
+    .finally(async () => {
+        await prisma.$disconnect();
+    });

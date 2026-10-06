@@ -34,6 +34,7 @@ const problemQueryBuilder = new QueryBuilder<
     },
     sortableFields: ["createdAt", "title", "defaultMarks"],
     selectableFields: Object.keys(PROBLEM_LIST_SELECT),
+    defaultSelect: PROBLEM_LIST_SELECT,
     softDelete: true,
     defaultSortField: "createdAt",
 });

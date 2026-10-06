@@ -30,6 +30,7 @@ const companyQueryBuilder = new QueryBuilder<
 	},
 	sortableFields: ["createdAt", "name"],
 	selectableFields: Object.keys(COMPANY_LIST_SELECT),
+	defaultSelect: COMPANY_LIST_SELECT,
 	softDelete: true,
 	defaultSortField: "createdAt",
 });

@@ -148,7 +148,9 @@ app.get("/health", async (_req: Request, res: Response) => {
 		});
 	}
 });
-
+app.get("/api/v1/debug-ip", (req: Request, res: Response) => {
+	res.json({ ip: req.ip, forwardedFor: req.headers["x-forwarded-for"] });
+});
 app.use("/api/v1", generalRateLimiter, globalRoutes);
 
 app.use(notFound);

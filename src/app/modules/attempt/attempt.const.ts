@@ -94,6 +94,13 @@ export const SUBMISSION_GRADING_SELECT = {
 	language: true,
 	status: true,
 	submittedAt: true,
+		attempt: {
+		select: {
+			id: true,
+			attemptNumber: true,
+			candidate: { select: { id: true, name: true, email: true } },
+		},
+	},
 	problem: {
 		select: {
 			id: true,

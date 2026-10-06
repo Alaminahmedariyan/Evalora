@@ -33,6 +33,7 @@ const notificationQueryBuilder = new QueryBuilder<
 	},
 	sortableFields: ["createdAt"],
 	selectableFields: Object.keys(NOTIFICATION_SELECT),
+	defaultSelect: NOTIFICATION_SELECT,
 	defaultSortField: "createdAt",
 });
 

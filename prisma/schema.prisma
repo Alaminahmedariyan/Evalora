@@ -352,7 +352,6 @@ model CandidateProfile {
   linkedinUrl  String?
   githubUrl    String?
   portfolioUrl String?
-
   skills          Json?
   experienceYears Int?
 

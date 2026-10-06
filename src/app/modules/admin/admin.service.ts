@@ -62,6 +62,7 @@ const auditLogQueryBuilder = new QueryBuilder<
 		},
 		sortableFields: ["createdAt"],
 		selectableFields: Object.keys(AUDIT_LOG_SELECT),
+		defaultSelect: AUDIT_LOG_SELECT,
 		defaultSortField: "createdAt",
 	},
 );
