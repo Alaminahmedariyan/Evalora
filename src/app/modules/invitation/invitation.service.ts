@@ -14,6 +14,7 @@ import { withTenantScope } from "../../../lib/prismaTenantScope";
 import AppError from "../../errors/appError";
 import { QueryBuilder } from "../../queryBuilder";
 import type { PrismaDelegate } from "../../queryBuilder/types";
+import { assertCompanyVerified } from "../../utils/assertCompanyVerified";
 import { escapeHtml } from "../../utils/escapeHtml";
 import { assertCanInvite } from "../../utils/planLimits";
 import { sendEmail } from "../../utils/sendEmail";
@@ -99,12 +100,16 @@ const invitationQueryBuilder = new QueryBuilder<
  * If an email matches an existing CANDIDATE account, the invitation is
  * linked to that user immediately; otherwise it stays email-only until
  * getMyInvitations() opportunistically links it after they register.
+ *
+ * Only admin-verified companies can invite candidates.
  */
 const inviteCandidates = async (
 	assessmentId: string,
 	companyId: string,
 	payload: InviteCandidatesInput,
 ) => {
+	await assertCompanyVerified(companyId);
+
 	// tenant-scoped via withTenantScope
 	const assessment = await prisma.assessment.findFirst({
 		where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId) ?? {},

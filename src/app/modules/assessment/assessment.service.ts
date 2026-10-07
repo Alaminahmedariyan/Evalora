@@ -8,6 +8,7 @@ import { withTenantScope } from "../../../lib/prismaTenantScope";
 import AppError from "../../errors/appError";
 import { QueryBuilder } from "../../queryBuilder";
 import { assertCanCreateAssessment } from "../../utils/planLimits";
+import { assertCompanyVerified } from "../../utils/assertCompanyVerified";
 import { generateUniqueSlug } from "../../utils/generateUniqueSlug";
 
 import {
@@ -359,6 +360,9 @@ const publishAssessment = async (
 			`Cannot publish an assessment with status ${assessment.status}.`,
 		);
 	}
+
+	// Candidates only ever see assessments from admin-verified companies.
+	await assertCompanyVerified(companyId);
 
 	if (assessment.assessmentProblems.length === 0) {
 		throw new AppError(

@@ -35,20 +35,99 @@ const companyQueryBuilder = new QueryBuilder<
 	defaultSortField: "createdAt",
 });
 
+const isUniqueConstraintError = (error: unknown) =>
+	typeof error === "object" &&
+	error !== null &&
+	(error as { code?: string }).code === "P2002";
+
+/**
+ * Best-effort: tell every active admin that a company is waiting for
+ * verification. A notification failure must never fail the registration
+ * that already committed, so errors are swallowed.
+ */
+const notifyAdminsOfNewCompany = async (company: {
+	id: string;
+	name: string;
+}) => {
+	try {
+		const admins = await prisma.user.findMany({
+			where: { role: "ADMIN", status: "ACTIVE", deletedAt: null },
+			select: { id: true },
+		});
+
+		if (admins.length === 0) return;
+
+		await prisma.notification.createMany({
+			data: admins.map((admin) => ({
+				userId: admin.id,
+				title: "New company awaiting verification",
+				message: `${company.name} has registered and is waiting for verification.`,
+				type: "SYSTEM" as const,
+				metadata: { companyId: company.id },
+			})),
+		});
+	} catch {
+		// best-effort — intentionally ignored
+	}
+};
+
+/** Best-effort: tell the owner their company was verified. */
+const notifyOwnerOfVerification = async (company: {
+	id: string;
+	name: string;
+	ownerId: string;
+}) => {
+	try {
+		await prisma.notification.create({
+			data: {
+				userId: company.ownerId,
+				title: "Your company is verified",
+				message: `${company.name} has been verified. You can now publish assessments and invite candidates.`,
+				type: "SYSTEM",
+				metadata: { companyId: company.id },
+			},
+		});
+	} catch {
+		// best-effort — intentionally ignored
+	}
+};
+
 /**
  * Register a company for the current user, and promote them to RECRUITER.
  *
- * `Company.ownerId` is unique — including on soft-deleted rows, since
- * Prisma has no partial-unique-index support here. So if this user
- * previously registered and then deleted a company, we reactivate that
- * same row (resetting it to unverified, since it's effectively a fresh
- * submission) instead of trying to create a second one, which the unique
- * constraint would reject anyway.
+ * Rules:
+ * - ADMIN accounts can't register a company (it would silently demote them
+ *   to RECRUITER).
+ * - `Company.ownerId` is unique — including on soft-deleted rows, since
+ *   Prisma has no partial-unique-index support here. So if this user
+ *   previously registered and then deleted a company, we reactivate that
+ *   same row instead of trying to create a second one.
+ * - Reactivation is treated as a fresh submission: the old description /
+ *   website / industry / logo are cleared (unless re-supplied), the slug is
+ *   regenerated from the new name, and the company goes back to
+ *   unverified. The existing subscription row is kept as-is (so unused paid
+ *   time isn't lost) — it is only created if missing.
  */
 const registerCompany = async (
 	userId: string,
 	payload: RegisterCompanyInput,
 ) => {
+	const user = await prisma.user.findFirst({
+		where: { id: userId, deletedAt: null },
+		select: { role: true },
+	});
+
+	if (!user) {
+		throw new AppError(StatusCodes.NOT_FOUND, "User not found.");
+	}
+
+	if (user.role === "ADMIN") {
+		throw new AppError(
+			StatusCodes.FORBIDDEN,
+			"Admin accounts can't register a company.",
+		);
+	}
+
 	const existing = await prisma.company.findUnique({
 		where: { ownerId: userId },
 	});
@@ -60,55 +139,110 @@ const registerCompany = async (
 		);
 	}
 
-	const company = await prisma.$transaction(async (tx) => {
-		let record;
+	let company;
 
-		if (existing) {
-			record = await tx.company.update({
-				where: { id: existing.id },
+	try {
+		company = await prisma.$transaction(async (tx) => {
+			let record;
+
+			if (existing) {
+				const slug = await generateUniqueSlug(payload.name, (candidate) =>
+					tx.company
+						.findUnique({ where: { slug: candidate } })
+						.then((found) => found !== null && found.id !== existing.id),
+				);
+
+				record = await tx.company.update({
+					where: { id: existing.id },
+					data: {
+						name: payload.name,
+						slug,
+						description: payload.description ?? null,
+						website: payload.website ?? null,
+						industry: payload.industry ?? null,
+						logo: null,
+						isVerified: false,
+						deletedAt: null,
+					},
+					select: COMPANY_DETAIL_SELECT,
+				});
+
+				await tx.subscription.upsert({
+					where: { companyId: record.id },
+					update: {},
+					create: { companyId: record.id, plan: "FREE", status: "ACTIVE" },
+				});
+			} else {
+				const slug = await generateUniqueSlug(payload.name, (candidate) =>
+					tx.company.findUnique({ where: { slug: candidate } }).then(Boolean),
+				);
+
+				record = await tx.company.create({
+					data: {
+						name: payload.name,
+						slug,
+						...(payload.description !== undefined && {
+							description: payload.description,
+						}),
+						...(payload.website !== undefined && { website: payload.website }),
+						...(payload.industry !== undefined && {
+							industry: payload.industry,
+						}),
+						ownerId: userId,
+					},
+					select: COMPANY_DETAIL_SELECT,
+				});
+
+				await tx.subscription.create({
+					data: { companyId: record.id, plan: "FREE", status: "ACTIVE" },
+				});
+			}
+
+			await tx.auditLog.create({
 				data: {
-					name: payload.name,
-					...(payload.description !== undefined && {
-						description: payload.description,
-					}),
-					...(payload.website !== undefined && { website: payload.website }),
-					...(payload.industry !== undefined && { industry: payload.industry }),
-					isVerified: false,
-					deletedAt: null,
+					userId,
+					action: "CREATE",
+					entity: "Company",
+					entityId: record.id,
+					newValue: { name: record.name, slug: record.slug },
+					metadata: { reactivated: Boolean(existing) },
 				},
-				select: COMPANY_DETAIL_SELECT,
 			});
-		} else {
-			const slug = await generateUniqueSlug(payload.name, (candidate) =>
-				tx.company.findUnique({ where: { slug: candidate } }).then(Boolean),
+
+			if (user.role === "CANDIDATE") {
+				await tx.user.update({
+					where: { id: userId },
+					data: { role: "RECRUITER" },
+				});
+
+				await tx.auditLog.create({
+					data: {
+						userId,
+						action: "ROLE_CHANGE",
+						entity: "User",
+						entityId: userId,
+						oldValue: { role: "CANDIDATE" },
+						newValue: { role: "RECRUITER" },
+						metadata: { reason: "company_registered" },
+					},
+				});
+			}
+
+			return record;
+		});
+	} catch (error) {
+		// Two concurrent registrations for the same owner/slug.
+		if (isUniqueConstraintError(error)) {
+			throw new AppError(
+				StatusCodes.CONFLICT,
+				"A company with these details already exists. Please try again.",
 			);
-
-			record = await tx.company.create({
-				data: {
-					name: payload.name,
-					slug,
-					...(payload.description !== undefined && {
-						description: payload.description,
-					}),
-					...(payload.website !== undefined && { website: payload.website }),
-					...(payload.industry !== undefined && { industry: payload.industry }),
-					ownerId: userId,
-				},
-				select: COMPANY_DETAIL_SELECT,
-			});
-
-			await tx.subscription.create({
-				data: { companyId: record.id, plan: "FREE", status: "ACTIVE" },
-			});
 		}
 
-		await tx.user.update({
-			where: { id: userId },
-			data: { role: "RECRUITER" },
-		});
+		throw error;
+	}
 
-		return record;
-	});
+	await notifyAdminsOfNewCompany(company);
 
 	return company;
 };
@@ -183,13 +317,21 @@ const updateMyCompany = async (
 		);
 	}
 
-	const updateData: Prisma.CompanyUpdateInput = {
-		...(payload.description !== undefined && {
-			description: payload.description,
-		}),
-		...(payload.website !== undefined && { website: payload.website }),
-		...(payload.industry !== undefined && { industry: payload.industry }),
-	};
+	const updateData: Prisma.CompanyUpdateInput = {};
+	const oldValue: Record<string, unknown> = {};
+	const newValue: Record<string, unknown> = {};
+
+	const editableFields = ["description", "website", "industry"] as const;
+
+	for (const field of editableFields) {
+		const next = payload[field];
+
+		if (next !== undefined && next !== existing[field]) {
+			updateData[field] = next;
+			oldValue[field] = existing[field];
+			newValue[field] = next;
+		}
+	}
 
 	if (file) {
 		const uploaded = await uploadFileToCloudinary(
@@ -198,13 +340,37 @@ const updateMyCompany = async (
 			"company-logos",
 		);
 		updateData.logo = uploaded.secure_url;
+		oldValue.logo = existing.logo;
+		newValue.logo = uploaded.secure_url;
 	}
 
-	return prisma.company.update({
-		where: { id: existing.id },
-		data: updateData,
-		select: COMPANY_DETAIL_SELECT,
-	});
+	// Nothing actually changed — skip the write and the audit row.
+	if (Object.keys(updateData).length === 0) {
+		return prisma.company.findUniqueOrThrow({
+			where: { id: existing.id },
+			select: COMPANY_DETAIL_SELECT,
+		});
+	}
+
+	const [updated] = await prisma.$transaction([
+		prisma.company.update({
+			where: { id: existing.id },
+			data: updateData,
+			select: COMPANY_DETAIL_SELECT,
+		}),
+		prisma.auditLog.create({
+			data: {
+				userId,
+				action: "UPDATE",
+				entity: "Company",
+				entityId: existing.id,
+				oldValue: oldValue as Prisma.InputJsonObject,
+				newValue: newValue as Prisma.InputJsonObject,
+			},
+		}),
+	]);
+
+	return updated;
 };
 
 /**
@@ -244,6 +410,8 @@ const verifyCompany = async (id: string, actorId: string) => {
 		}),
 	]);
 
+	await notifyOwnerOfVerification(updated);
+
 	return updated;
 };
 
@@ -252,7 +420,12 @@ const verifyCompany = async (id: string, actorId: string) => {
  * company) or an Admin. The owner's role is stepped back down to
  * CANDIDATE, since RECRUITER without a company doesn't make sense — if
  * they register a new/reactivated company later, registerCompany() will
- * promote them again.
+ * promote them again. Only a RECRUITER is demoted: an ADMIN who happens to
+ * own a company keeps their role.
+ *
+ * Live assessments (PUBLISHED/ACTIVE) are closed and PENDING invitations are
+ * cancelled in the same transaction, so a deleted company can't keep
+ * accepting candidates.
  */
 const softDeleteCompany = async (
 	id: string,
@@ -276,16 +449,67 @@ const softDeleteCompany = async (
 		);
 	}
 
-	await prisma.$transaction([
-		prisma.company.update({
+	await prisma.$transaction(async (tx) => {
+		await tx.company.update({
 			where: { id },
 			data: { deletedAt: new Date() },
-		}),
-		prisma.user.update({
-			where: { id: company.ownerId },
+		});
+
+		// Once the owner is demoted nobody can manage this company's
+		// assessments any more, so stop them from taking new candidates:
+		// close anything live and cancel invitations nobody has acted on.
+		// Attempts already in progress and ACCEPTED/COMPLETED invitations
+		// are left untouched (history is kept).
+		const closedAssessments = await tx.assessment.updateMany({
+			where: {
+				companyId: id,
+				deletedAt: null,
+				status: { in: ["PUBLISHED", "ACTIVE"] },
+			},
+			data: { status: "CLOSED" },
+		});
+
+		const cancelledInvitations = await tx.assessmentInvitation.deleteMany({
+			where: {
+				status: "PENDING",
+				assessment: { companyId: id },
+			},
+		});
+
+		await tx.auditLog.create({
+			data: {
+				userId: actorId,
+				action: "DELETE",
+				entity: "Company",
+				entityId: id,
+				oldValue: { name: company.name, isVerified: company.isVerified },
+				metadata: {
+					deletedByOwner: isOwner,
+					closedAssessments: closedAssessments.count,
+					cancelledInvitations: cancelledInvitations.count,
+				},
+			},
+		});
+
+		const demoted = await tx.user.updateMany({
+			where: { id: company.ownerId, role: "RECRUITER" },
 			data: { role: "CANDIDATE" },
-		}),
-	]);
+		});
+
+		if (demoted.count > 0) {
+			await tx.auditLog.create({
+				data: {
+					userId: actorId,
+					action: "ROLE_CHANGE",
+					entity: "User",
+					entityId: company.ownerId,
+					oldValue: { role: "RECRUITER" },
+					newValue: { role: "CANDIDATE" },
+					metadata: { reason: "company_deleted" },
+				},
+			});
+		}
+	});
 
 	return { message: "Company deleted successfully." };
 };
