@@ -16,6 +16,8 @@ import {
 import { sendEmailSmtp } from "../app/utils/sendEmailSmtp";
 import { prisma } from "./prisma";
 
+const isProduction = config.app.env === "production";
+
 const socialProviders: Record<
 	string,
 	{ clientId: string; clientSecret: string }
@@ -44,11 +46,12 @@ const trustedOrigins = [
 		.filter(Boolean),
 ].filter((origin, index, origins) => origins.indexOf(origin) === index);
 
-if (config.app.env !== "production") {
+if (!isProduction) {
 	trustedOrigins.push("null");
 }
 
 export const auth = betterAuth({
+	baseURL: config.betterAuth.url || "https://evalora-server.vercel.app",
 	database: prismaAdapter(prisma, { provider: "postgresql" }),
 
 	user: {
@@ -67,7 +70,7 @@ export const auth = betterAuth({
 
 	emailAndPassword: {
 		enabled: true,
-		requireEmailVerification: config.app.env === "production",
+		requireEmailVerification: isProduction,
 	},
 
 	emailVerification: {
@@ -85,11 +88,14 @@ export const auth = betterAuth({
 	trustedOrigins,
 
 	advanced: {
-		useSecureCookies: config.app.env === "production",
+		useSecureCookies: isProduction,
 
+		// The frontend and the backend are on different sites, so in production
+		// the cookies must be SameSite=None, which browsers only accept together
+		// with Secure. Locally (same site, plain http) Lax is enough.
 		defaultCookieAttributes: {
-			sameSite: "lax",
-			secure: config.app.env === "production",
+			sameSite: isProduction ? "none" : "lax",
+			secure: isProduction,
 		},
 	},
 
@@ -102,7 +108,7 @@ export const auth = betterAuth({
 
 		emailOTP({
 			otpLength: 6,
-			expiresIn: config.app.env === "production" ? 5 * 60 : 60 * 60,
+			expiresIn: isProduction ? 5 * 60 : 60 * 60,
 			allowedAttempts: 5,
 			overrideDefaultEmailVerification: true,
 
@@ -129,7 +135,7 @@ export const auth = betterAuth({
 									purpose: "reset your password",
 								};
 
-				if (config.app.env !== "production") {
+				if (!isProduction) {
 					console.log(
 						`[Email OTP] ${subjectAndPurpose.purpose} code for ${email}: ${otp}`,
 					);
