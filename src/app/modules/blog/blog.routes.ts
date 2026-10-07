@@ -1,7 +1,7 @@
 import { Router } from "express";
 
-import { imageUpload } from "../../middlewares/upload";
 import { requireAuth, requireRole } from "../../middlewares/requireAuth";
+import { imageUpload } from "../../middlewares/upload";
 import { validateRequest } from "../../middlewares/validateRequest";
 
 import { blogController } from "./blog.controller";

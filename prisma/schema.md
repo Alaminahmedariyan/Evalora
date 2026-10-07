@@ -161,6 +161,17 @@ enum ConsentType {
   TERMS_OF_SERVICE
 }
 
+enum BlogPostStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum ContactMessageStatus {
+  NEW
+  READ
+}
+
 // Better Auth is the single source of truth for credentials, sessions, and
 // verification tokens (Account / Session / Verification below). Do not add
 // password fields back onto User.
@@ -206,9 +217,11 @@ model User {
 
   evaluations SubmissionEvaluation[] @relation("SubmissionEvaluator")
 
-  payments      Payment[]
-  notifications Notification[]
-  auditLogs     AuditLog[]
+  payments        Payment[]
+  notifications   Notification[]
+  auditLogs       AuditLog[]
+  blogPosts       BlogPost[]       @relation("BlogPostAuthor")
+  idempotencyKeys IdempotencyKey[]
 
   @@index([role])
   @@index([status])
@@ -339,16 +352,17 @@ model CandidateProfile {
   linkedinUrl  String?
   githubUrl    String?
   portfolioUrl String?
-
   skills          Json?
   experienceYears Int?
 
   deletedAt DateTime? @db.Timestamptz(3)
 
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  createdAt             DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime @updatedAt @db.Timestamptz(3)
+  isVisibleToRecruiters Boolean  @default(true)
 
   @@index([deletedAt])
+  @@index([isVisibleToRecruiters, deletedAt])
   @@map("candidate_profiles")
 }
 
@@ -940,4 +954,117 @@ model UserConsent {
   @@unique([userId, consentType])
   @@index([userId])
   @@map("user_consents")
+}
+
+model IdempotencyKey {
+  id          String   @id @default(cuid())
+  key         String
+  userId      String
+  endpoint    String
+  requestHash String
+  response    Json
+  statusCode  Int
+  expiresAt   DateTime @db.Timestamptz(3)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([key, userId])
+  @@index([expiresAt])
+  @@index([userId, createdAt])
+  @@map("idempotency_keys")
+}
+
+model BlogCategory {
+  id String @id @default(cuid())
+
+  name        String  @unique
+  slug        String  @unique
+  description String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  posts BlogPost[]
+
+  @@map("blog_categories")
+}
+
+model BlogTag {
+  id String @id @default(cuid())
+
+  name String @unique
+  slug String @unique
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  posts BlogPostTag[]
+
+  @@map("blog_tags")
+}
+
+// content is Markdown. A category can't be deleted while posts use it
+// (Restrict); an author can't be hard-deleted while they have posts.
+model BlogPost {
+  id String @id @default(cuid())
+
+  title   String
+  slug    String @unique
+  excerpt String
+  content String
+
+  coverImage String?
+
+  status             BlogPostStatus @default(DRAFT)
+  readingTimeMinutes Int            @default(1)
+  publishedAt        DateTime?      @db.Timestamptz(3)
+
+  authorId String
+  author   User   @relation("BlogPostAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  categoryId String
+  category   BlogCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  tags BlogPostTag[]
+
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([status, publishedAt])
+  @@index([categoryId, status, publishedAt])
+  @@index([authorId, status, publishedAt])
+  @@index([deletedAt])
+  @@map("blog_posts")
+}
+
+model BlogPostTag {
+  postId String
+  post   BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  tagId String
+  tag   BlogTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([postId, tagId])
+  @@index([tagId])
+  @@map("blog_post_tags")
+}
+
+model ContactMessage {
+  id String @id @default(cuid())
+
+  name    String
+  email   String @db.VarChar(320)
+  subject String
+  message String
+
+  status ContactMessageStatus @default(NEW)
+  readAt DateTime?            @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([status, createdAt])
+  @@index([createdAt])
+  @@map("contact_messages")
 }
