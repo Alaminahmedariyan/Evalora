@@ -37,13 +37,15 @@ if (config.oauth.github.clientId && config.oauth.github.clientSecret) {
 	};
 }
 
+const clientOrigins = config.app.clientUrl
+	.split(",")
+	.map((origin) => origin.trim())
+	.filter(Boolean);
+
 const trustedOrigins = [
 	"http://localhost:3000",
 	"http://127.0.0.1:3000",
-	...config.app.clientUrl
-		.split(",")
-		.map((origin) => origin.trim())
-		.filter(Boolean),
+	...clientOrigins,
 ].filter((origin, index, origins) => origins.indexOf(origin) === index);
 
 if (!isProduction) {
@@ -51,7 +53,10 @@ if (!isProduction) {
 }
 
 export const auth = betterAuth({
-	baseURL: config.betterAuth.url || "https://evalora-server.vercel.app",
+	// The browser reaches this API through the frontend domain (Next.js
+	// rewrites), so Better Auth must build its OAuth callback URLs and set
+	// its cookies for the FRONTEND origin. Set BETTER_AUTH_URL to it.
+	baseURL: config.betterAuth.url || clientOrigins[0],
 	database: prismaAdapter(prisma, { provider: "postgresql" }),
 
 	user: {
@@ -90,11 +95,11 @@ export const auth = betterAuth({
 	advanced: {
 		useSecureCookies: isProduction,
 
-		// The frontend and the backend are on different sites, so in production
-		// the cookies must be SameSite=None, which browsers only accept together
-		// with Secure. Locally (same site, plain http) Lax is enough.
+		// Cookies are first-party now (the frontend proxies /api/auth and
+		// /api/v1), so Lax is correct and works in every browser. SameSite=None
+		// is no longer needed.
 		defaultCookieAttributes: {
-			sameSite: isProduction ? "none" : "lax",
+			sameSite: "lax",
 			secure: isProduction,
 		},
 	},
@@ -103,7 +108,7 @@ export const auth = betterAuth({
 		bearer(),
 
 		twoFactor({
-			issuer: "YourAppName",
+			issuer: "Evalora",
 		}),
 
 		emailOTP({
