@@ -151,6 +151,11 @@ app.get("/health", async (_req: Request, res: Response) => {
 app.get("/api/v1/debug-ip", (req: Request, res: Response) => {
 	res.json({ ip: req.ip, forwardedFor: req.headers["x-forwarded-for"] });
 });
+console.log("=== API ROUTES DEBUG ===");
+console.log("API v1 routes are being registered");
+console.log("Blog route expected: GET /api/v1/blog/categories");
+console.log("Blog admin route expected: POST /api/v1/blog/admin/categories");
+console.log("========================");
 app.use("/api/v1", generalRateLimiter, globalRoutes);
 
 app.use(notFound);
