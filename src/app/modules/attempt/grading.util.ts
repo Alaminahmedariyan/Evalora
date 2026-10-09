@@ -1,6 +1,7 @@
 import type { ProblemType } from "../../../generated/prisma/enums";
 
 import { prisma } from "../../../lib/prisma";
+import { isResultReleasedToCandidate } from "../result/result.access";
 
 /**
  * Called once per assessment problem when an attempt is finalized (either
@@ -20,103 +21,117 @@ import { prisma } from "../../../lib/prisma";
  *   attempt.interface.ts / the module's opening explanation.
  */
 export const gradeSubmissionForProblem = async (params: {
-	attemptId: string;
-	problemId: string;
-	problemType: ProblemType;
-	marks: number;
+  attemptId: string;
+  problemId: string;
+  problemType: ProblemType;
+  marks: number;
 }) => {
-	const { attemptId, problemId, problemType, marks } = params;
+  const { attemptId, problemId, problemType, marks } = params;
 
-	const submission = await prisma.submission.findUnique({
-		where: { attemptId_problemId: { attemptId, problemId } },
-	});
+  const submission = await prisma.submission.findUnique({
+    where: { attemptId_problemId: { attemptId, problemId } },
+  });
 
-	if (!submission) {
-		const blank = await prisma.submission.create({
-			data: { attemptId, problemId, status: "EVALUATED" },
-		});
+  if (!submission) {
+    const blank = await prisma.submission.create({
+      data: { attemptId, problemId, status: "EVALUATED" },
+    });
 
-		await prisma.submissionEvaluation.create({
-			data: {
-				submissionId: blank.id,
-				score: 0,
-				maxScore: marks,
-				status: "COMPLETED",
-				isAutoEvaluated: true,
-				evaluatedAt: new Date(),
-			},
-		});
-		return;
-	}
+    await prisma.submissionEvaluation.create({
+      data: {
+        submissionId: blank.id,
+        score: 0,
+        maxScore: marks,
+        status: "COMPLETED",
+        isAutoEvaluated: true,
+        evaluatedAt: new Date(),
+      },
+    });
 
-	if (problemType === "MCQ") {
-		const [mcqProblem, selectedAnswers] = await Promise.all([
-			prisma.mcqProblem.findUniqueOrThrow({
-				where: { problemId },
-				include: { options: { select: { id: true, isCorrect: true } } },
-			}),
-			prisma.submissionAnswer.findMany({
-				where: { submissionId: submission.id },
-				select: { optionId: true },
-			}),
-		]);
+    return;
+  }
 
-		const selectedIds = new Set(
-			selectedAnswers.map((answer) => answer.optionId),
-		);
-		const correctIds = new Set(
-			mcqProblem.options
-				.filter((option) => option.isCorrect)
-				.map((option) => option.id),
-		);
-		const isFullyCorrect =
-			selectedIds.size === correctIds.size &&
-			[...selectedIds].every((id) => correctIds.has(id));
+  if (problemType === "MCQ") {
+    const [mcqProblem, selectedAnswers] = await Promise.all([
+      prisma.mcqProblem.findUniqueOrThrow({
+        where: { problemId },
+        include: {
+          options: {
+            select: { id: true, isCorrect: true },
+          },
+        },
+      }),
+      prisma.submissionAnswer.findMany({
+        where: { submissionId: submission.id },
+        select: { optionId: true },
+      }),
+    ]);
 
-		const score = isFullyCorrect ? marks : 0;
+    const selectedIds = new Set(
+      selectedAnswers.map((answer) => answer.optionId),
+    );
 
-		await prisma.submission.update({
-			where: { id: submission.id },
-			data: { status: "EVALUATED" },
-		});
-		await prisma.submissionEvaluation.upsert({
-			where: { submissionId: submission.id },
-			update: {
-				score,
-				maxScore: marks,
-				status: "COMPLETED",
-				isAutoEvaluated: true,
-				evaluatedAt: new Date(),
-			},
-			create: {
-				submissionId: submission.id,
-				score,
-				maxScore: marks,
-				status: "COMPLETED",
-				isAutoEvaluated: true,
-				evaluatedAt: new Date(),
-			},
-		});
-		return;
-	}
+    const correctIds = new Set(
+      mcqProblem.options
+        .filter((option) => option.isCorrect)
+        .map((option) => option.id),
+    );
 
-	// CODING / WRITTEN with a real answer — needs a human. Submission moves
-	// to EVALUATING (not EVALUATED) until a recruiter grades it.
-	await prisma.submission.update({
-		where: { id: submission.id },
-		data: { status: "EVALUATING" },
-	});
-	await prisma.submissionEvaluation.upsert({
-		where: { submissionId: submission.id },
-		update: { maxScore: marks, status: "PENDING", isAutoEvaluated: false },
-		create: {
-			submissionId: submission.id,
-			score: 0,
-			maxScore: marks,
-			status: "PENDING",
-			isAutoEvaluated: false,
-		},
-	});
+    const isFullyCorrect =
+      selectedIds.size === correctIds.size &&
+      [...selectedIds].every((id) => correctIds.has(id));
+
+    const score = isFullyCorrect ? marks : 0;
+
+    await prisma.submission.update({
+      where: { id: submission.id },
+      data: { status: "EVALUATED" },
+    });
+
+    await prisma.submissionEvaluation.upsert({
+      where: { submissionId: submission.id },
+      update: {
+        score,
+        maxScore: marks,
+        status: "COMPLETED",
+        isAutoEvaluated: true,
+        evaluatedAt: new Date(),
+      },
+      create: {
+        submissionId: submission.id,
+        score,
+        maxScore: marks,
+        status: "COMPLETED",
+        isAutoEvaluated: true,
+        evaluatedAt: new Date(),
+      },
+    });
+
+    return;
+  }
+
+  // CODING / WRITTEN with a real answer — needs a human. Submission moves
+  // to EVALUATING (not EVALUATED) until a recruiter grades it.
+  await prisma.submission.update({
+    where: { id: submission.id },
+    data: { status: "EVALUATING" },
+  });
+
+  await prisma.submissionEvaluation.upsert({
+    where: { submissionId: submission.id },
+    update: {
+      maxScore: marks,
+      status: "PENDING",
+      isAutoEvaluated: false,
+    },
+    create: {
+      submissionId: submission.id,
+      score: 0,
+      maxScore: marks,
+      status: "PENDING",
+      isAutoEvaluated: false,
+    },
+  });
 };
 
 /**
@@ -127,74 +142,93 @@ export const gradeSubmissionForProblem = async (params: {
  * evaluation is COMPLETED and the Result can carry a final PASSED/FAILED
  * verdict instead of PENDING.
  *
- * Fires a "result published" notification exactly once — the moment the
- * result transitions from not-fully-graded to fully-graded, not on every
- * call.
+ * Fires a result-ready notification exactly once when the result becomes
+ * fully graded AND is released to the candidate.
  */
 export const recomputeResult = async (attemptId: string) => {
-	const attempt = await prisma.assessmentAttempt.findUniqueOrThrow({
-		where: { id: attemptId },
-		include: {
-			assessment: {
-				select: { id: true, totalMarks: true, passingMarks: true },
-			},
-			submissions: { include: { evaluation: true } },
-		},
-	});
+  const attempt = await prisma.assessmentAttempt.findUniqueOrThrow({
+    where: { id: attemptId },
+    include: {
+      assessment: {
+        select: {
+          id: true,
+          title: true,
+          totalMarks: true,
+          passingMarks: true,
+          showResultImmediately: true,
+          status: true,
+        },
+      },
+      submissions: {
+        include: { evaluation: true },
+      },
+    },
+  });
 
-	const allCompleted = attempt.submissions.every(
-		(submission) => submission.evaluation?.status === "COMPLETED",
-	);
-	const totalScore = attempt.submissions.reduce(
-		(sum, submission) => sum + (submission.evaluation?.score ?? 0),
-		0,
-	);
-	const totalMarks = attempt.assessment.totalMarks;
-	const percentage =
-		totalMarks > 0 ? Math.round((totalScore / totalMarks) * 10000) / 100 : 0;
-	const status = !allCompleted
-		? "PENDING"
-		: totalScore >= attempt.assessment.passingMarks
-			? "PASSED"
-			: "FAILED";
+  const allCompleted = attempt.submissions.every(
+    (submission) => submission.evaluation?.status === "COMPLETED",
+  );
 
-	const existingResult = await prisma.result.findUnique({
-		where: { attemptId },
-	});
-	const isNewlyCompleted =
-		allCompleted && (!existingResult || existingResult.status === "PENDING");
+  const totalScore = attempt.submissions.reduce(
+    (sum, submission) => sum + (submission.evaluation?.score ?? 0),
+    0,
+  );
 
-	await prisma.result.upsert({
-		where: { attemptId },
-		update: {
-			totalScore,
-			totalMarks,
-			percentage,
-			status,
-			evaluatedAt: allCompleted ? new Date() : null,
-		},
-		create: {
-			attemptId,
-			assessmentId: attempt.assessment.id,
-			totalScore,
-			totalMarks,
-			percentage,
-			status,
-			evaluatedAt: allCompleted ? new Date() : null,
-		},
-	});
+  const totalMarks = attempt.assessment.totalMarks;
 
-	if (isNewlyCompleted) {
-		await prisma.notification.create({
-			data: {
-				userId: attempt.candidateId,
-				title: "Result Published",
-				message: `Your result is now available: ${totalScore}/${totalMarks} (${status}).`,
-				type: "ATTEMPT_EVALUATED",
-				metadata: { assessmentId: attempt.assessment.id, attemptId },
-			},
-		});
-	}
+  const percentage =
+    totalMarks > 0 ? Math.round((totalScore / totalMarks) * 10000) / 100 : 0;
 
-	return { allCompleted, totalScore, totalMarks, percentage, status };
+  const status = !allCompleted
+    ? "PENDING"
+    : totalScore >= attempt.assessment.passingMarks
+      ? "PASSED"
+      : "FAILED";
+
+  const existingResult = await prisma.result.findUnique({
+    where: { attemptId },
+  });
+
+  const isNewlyCompleted =
+    allCompleted && (!existingResult || existingResult.status === "PENDING");
+
+  await prisma.result.upsert({
+    where: { attemptId },
+    update: {
+      totalScore,
+      totalMarks,
+      percentage,
+      status,
+      evaluatedAt: allCompleted ? new Date() : null,
+    },
+    create: {
+      attemptId,
+      assessmentId: attempt.assessment.id,
+      totalScore,
+      totalMarks,
+      percentage,
+      status,
+      evaluatedAt: allCompleted ? new Date() : null,
+    },
+  });
+
+  if (
+    isNewlyCompleted &&
+    isResultReleasedToCandidate(attempt.assessment)
+  ) {
+    await prisma.notification.create({
+      data: {
+        userId: attempt.candidateId,
+        title: "Result ready",
+        message: `Your result for "${attempt.assessment.title}" is ready to view.`,
+        type: "ASSESSMENT_RESULT",
+        metadata: {
+          assessmentId: attempt.assessment.id,
+          attemptId,
+        },
+      },
+    });
+  }
+
+  return { allCompleted, totalScore, totalMarks, percentage, status };
 };

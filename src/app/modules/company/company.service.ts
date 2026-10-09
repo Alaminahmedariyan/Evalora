@@ -10,13 +10,14 @@ import AppError from "../../errors/appError";
 import { QueryBuilder } from "../../queryBuilder";
 import { uploadFileToCloudinary } from "../../utils/fileUploader";
 import { generateUniqueSlug } from "../../utils/generateUniqueSlug";
+import { getPlanSnapshot } from "../../utils/planLimits";
 
 import { COMPANY_DETAIL_SELECT, COMPANY_LIST_SELECT } from "./company.const";
 import type {
+	PendingCompany,
 	RegisterCompanyInput,
 	UpdateCompanyInput,
 } from "./company.interface";
-import { getPlanSnapshot } from "../../utils/planLimits";
 
 const companyQueryBuilder = new QueryBuilder<
 	Prisma.CompanyGetPayload<{ select: typeof COMPANY_LIST_SELECT }>,
@@ -41,33 +42,46 @@ const isUniqueConstraintError = (error: unknown) =>
 	(error as { code?: string }).code === "P2002";
 
 /**
- * Best-effort: tell every active admin that a company is waiting for
- * verification. A notification failure must never fail the registration
- * that already committed, so errors are swallowed.
+ * Notifies every active admin that a company is waiting for verification.
+ * Returns how many admins were notified.
  */
-const notifyAdminsOfNewCompany = async (company: {
-	id: string;
-	name: string;
-}) => {
+const notifyAdminsOfPendingCompany = async (
+	company: PendingCompany,
+	reminder = false,
+): Promise<number> => {
+	const admins = await prisma.user.findMany({
+		where: { role: "ADMIN", status: "ACTIVE", deletedAt: null },
+		select: { id: true },
+	});
+
+	if (admins.length === 0) return 0;
+
+	await prisma.notification.createMany({
+		data: admins.map((admin) => ({
+			userId: admin.id,
+			title: reminder
+				? "Company verification reminder"
+				: "New company awaiting verification",
+			message: reminder
+				? `${company.name} is still waiting for verification.`
+				: `${company.name} has registered and is waiting for verification.`,
+			type: "SYSTEM" as const,
+			metadata: { companyId: company.id, kind: "company_pending" },
+		})),
+	});
+
+	return admins.length;
+};
+
+/**
+ * Best-effort wrapper used at registration: a notification failure must
+ * never fail a registration that already committed.
+ */
+const notifyAdminsOfNewCompany = async (company: PendingCompany) => {
 	try {
-		const admins = await prisma.user.findMany({
-			where: { role: "ADMIN", status: "ACTIVE", deletedAt: null },
-			select: { id: true },
-		});
-
-		if (admins.length === 0) return;
-
-		await prisma.notification.createMany({
-			data: admins.map((admin) => ({
-				userId: admin.id,
-				title: "New company awaiting verification",
-				message: `${company.name} has registered and is waiting for verification.`,
-				type: "SYSTEM" as const,
-				metadata: { companyId: company.id },
-			})),
-		});
+		await notifyAdminsOfPendingCompany(company);
 	} catch {
-		// best-effort — intentionally ignored
+		// best-effort, intentionally ignored
 	}
 };
 
@@ -84,11 +98,11 @@ const notifyOwnerOfVerification = async (company: {
 				title: "Your company is verified",
 				message: `${company.name} has been verified. You can now publish assessments and invite candidates.`,
 				type: "SYSTEM",
-				metadata: { companyId: company.id },
+				metadata: { companyId: company.id, kind: "company_verified" },
 			},
 		});
 	} catch {
-		// best-effort — intentionally ignored
+		// best-effort, intentionally ignored
 	}
 };
 
@@ -98,7 +112,7 @@ const notifyOwnerOfVerification = async (company: {
  * Rules:
  * - ADMIN accounts can't register a company (it would silently demote them
  *   to RECRUITER).
- * - `Company.ownerId` is unique — including on soft-deleted rows, since
+ * - `Company.ownerId` is unique, including on soft-deleted rows, since
  *   Prisma has no partial-unique-index support here. So if this user
  *   previously registered and then deleted a company, we reactivate that
  *   same row instead of trying to create a second one.
@@ -106,7 +120,7 @@ const notifyOwnerOfVerification = async (company: {
  *   website / industry / logo are cleared (unless re-supplied), the slug is
  *   regenerated from the new name, and the company goes back to
  *   unverified. The existing subscription row is kept as-is (so unused paid
- *   time isn't lost) — it is only created if missing.
+ *   time isn't lost); it is only created if missing.
  */
 const registerCompany = async (
 	userId: string,
@@ -249,7 +263,7 @@ const registerCompany = async (
 
 /**
  * List companies. Non-admins only ever see verified, non-deleted companies
- * (softDelete: true in the query builder already excludes deleted rows) —
+ * (softDelete: true in the query builder already excludes deleted rows);
  * an unverified company is only visible to its owner or an Admin.
  */
 const getAllCompanies = async (
@@ -344,7 +358,7 @@ const updateMyCompany = async (
 		newValue.logo = uploaded.secure_url;
 	}
 
-	// Nothing actually changed — skip the write and the audit row.
+	// Nothing actually changed: skip the write and the audit row.
 	if (Object.keys(updateData).length === 0) {
 		return prisma.company.findUniqueOrThrow({
 			where: { id: existing.id },
@@ -371,6 +385,64 @@ const updateMyCompany = async (
 	]);
 
 	return updated;
+};
+
+const VERIFICATION_REMINDER_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Lets the owner nudge the admins about a company that is still unverified.
+ * Registration already notifies them once, so this is a reminder, limited to
+ * one every 24 hours. That limit counts the registration notification too.
+ */
+const requestVerification = async (userId: string) => {
+	const company = await prisma.company.findFirst({
+		where: { ownerId: userId, deletedAt: null },
+		select: { id: true, name: true, isVerified: true },
+	});
+
+	if (!company) {
+		throw new AppError(
+			StatusCodes.NOT_FOUND,
+			"You don't have a registered company yet.",
+		);
+	}
+
+	if (company.isVerified) {
+		throw new AppError(
+			StatusCodes.CONFLICT,
+			"Your company is already verified.",
+		);
+	}
+
+	const recentlyNotified = await prisma.notification.findFirst({
+		where: {
+			type: "SYSTEM",
+			createdAt: {
+				gt: new Date(Date.now() - VERIFICATION_REMINDER_COOLDOWN_MS),
+			},
+			user: { role: "ADMIN" },
+			metadata: { path: ["companyId"], equals: company.id },
+		},
+		select: { id: true },
+	});
+
+	if (recentlyNotified) {
+		throw new AppError(
+			StatusCodes.TOO_MANY_REQUESTS,
+			"Admins were already notified in the last 24 hours. Please try again later.",
+		);
+	}
+
+	const notified = await notifyAdminsOfPendingCompany(company, true);
+
+	if (notified === 0) {
+		throw new AppError(
+			StatusCodes.SERVICE_UNAVAILABLE,
+			"No administrator is available to review your company right now.",
+		);
+	}
+
+	return { notified };
 };
 
 /**
@@ -418,7 +490,7 @@ const verifyCompany = async (id: string, actorId: string) => {
 /**
  * Soft delete a company. Allowed for the owner (deactivating their own
  * company) or an Admin. The owner's role is stepped back down to
- * CANDIDATE, since RECRUITER without a company doesn't make sense — if
+ * CANDIDATE, since RECRUITER without a company doesn't make sense; if
  * they register a new/reactivated company later, registerCompany() will
  * promote them again. Only a RECRUITER is demoted: an ADMIN who happens to
  * own a company keeps their role.
@@ -533,7 +605,7 @@ const getMySubscription = async (userId: string) => {
 
 	let subscription = company.subscription;
 
-	// Lazy expiry — a paid plan lapses back to FREE once its 30-day
+	// Lazy expiry: a paid plan lapses back to FREE once its 30-day
 	// currentPeriodEnd has passed and nobody has paid again.
 	if (
 		subscription.plan !== "FREE" &&
@@ -636,6 +708,7 @@ export const companyService = {
 	getCompanyById,
 	getMyCompany,
 	updateMyCompany,
+	requestVerification,
 	verifyCompany,
 	softDeleteCompany,
 	getMySubscription,

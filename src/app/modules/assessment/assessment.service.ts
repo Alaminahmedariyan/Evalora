@@ -19,6 +19,7 @@ import type {
 	CreateAssessmentInput,
 	UpdateAssessmentInput,
 } from "./assessment.interface";
+import { notifyResultsReleased } from "../result/result.notification";
 
 const assessmentQueryBuilder = new QueryBuilder<
 	Prisma.AssessmentGetPayload<{ select: typeof ASSESSMENT_LIST_SELECT }>,
@@ -425,7 +426,7 @@ const closeAssessment = async (
 		);
 	}
 
-	return prisma.assessment.update({
+	const closed = await prisma.assessment.update({
 		where: {
 			id,
 		},
@@ -434,6 +435,18 @@ const closeAssessment = async (
 		},
 		select: ASSESSMENT_DETAIL_SELECT,
 	});
+
+	// Results were held back by showResultImmediately = false and are visible
+	// from now on. A failed notification must never block closing.
+	if (!assessment.showResultImmediately) {
+		try {
+			await notifyResultsReleased(id, assessment.title);
+		} catch (error) {
+			console.error("Failed to send result-release notifications", error);
+		}
+	}
+
+	return closed;
 };
 
 const softDeleteAssessment = async (

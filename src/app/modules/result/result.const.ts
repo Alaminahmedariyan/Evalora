@@ -6,6 +6,9 @@ export const RESULT_LEADERBOARD_SELECT = {
 	status: true,
 	rank: true,
 	evaluatedAt: true,
+	assessment: {
+		select: { id: true, title: true, passingMarks: true },
+	},
 	attempt: {
 		select: {
 			id: true,

@@ -12,3 +12,5 @@ export type UpdateCompanyInput = Partial<{
 	industry: string;
 	logo: string;
 }>;
+
+export type PendingCompany = { id: string; name: string };

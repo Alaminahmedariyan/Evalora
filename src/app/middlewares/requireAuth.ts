@@ -52,6 +52,37 @@ export const requireAuth = catchAsync(
 	},
 );
 
+/**
+ * Like requireAuth, but never rejects. Public routes that behave differently
+ * for signed-in users (for example an admin seeing unverified companies) use
+ * this so that req.user is filled in when a valid session exists.
+ * A missing, invalid, suspended or deleted account simply stays anonymous.
+ */
+export const optionalAuth = catchAsync(
+	async (req: Request, _res: Response, next: NextFunction) => {
+		try {
+			const session = await auth.api.getSession({
+				headers: fromNodeHeaders(req.headers),
+			});
+
+			if (session?.user) {
+				const account = await prisma.user.findUnique({
+					where: { id: session.user.id },
+					select: { status: true, deletedAt: true },
+				});
+
+				if (account && !account.deletedAt && account.status !== "SUSPENDED") {
+					req.user = session.user as unknown as AuthenticatedUser;
+				}
+			}
+		} catch {
+			// A session lookup problem must not break a public endpoint.
+		}
+
+		next();
+	},
+);
+
 export const requireRole = (...roles: UserRole[]) => {
 	return catchAsync(
 		async (req: Request, _res: Response, next: NextFunction) => {

@@ -7,6 +7,7 @@ import { withTenantScope } from "../../../lib/prismaTenantScope";
 import AppError from "../../errors/appError";
 
 import { RESULT_LEADERBOARD_SELECT } from "./result.const";
+import { isResultReleasedToCandidate } from "./result.access";
 
 const getResultByAttemptId = async (
     attemptId: string,
@@ -42,10 +43,9 @@ const getResultByAttemptId = async (
     // is true; otherwise it stays hidden until the recruiter closes the
     // assessment. Recruiters/Admins are never subject to this gate — they
     // need to see results while grading, regardless of this flag.
-    if (
+     if (
         requester.role === "CANDIDATE" &&
-        !attempt.assessment.showResultImmediately &&
-        attempt.assessment.status !== "CLOSED"
+        !isResultReleasedToCandidate(attempt.assessment)
     ) {
         throw new AppError(
             StatusCodes.FORBIDDEN,
