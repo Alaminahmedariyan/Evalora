@@ -9,7 +9,14 @@ import { resultService } from "./result.service";
 
 const getResultByAttemptId = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
-	const companyId = (await getCompanyIdForUser(currentUser, req)) ?? undefined;
+
+	// A candidate has no company, and getCompanyIdForUser() rejects candidates
+	// outright. Their access is limited by candidateId inside the service, so
+	// the company is only looked up for recruiters and admins.
+	const companyId =
+		currentUser.role === "CANDIDATE"
+			? undefined
+			: ((await getCompanyIdForUser(currentUser, req)) ?? undefined);
 
 	const result = await resultService.getResultByAttemptId(
 		req.params.attemptId as string,
