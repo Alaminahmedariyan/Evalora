@@ -34,6 +34,40 @@ const invitationEmailTemplate = (assessmentTitle: string, expiresAt: Date) => `
 	</div>
 `;
 
+type InvitationNotice = {
+	invitationId: string;
+	assessmentId: string;
+	assessmentTitle: string;
+	candidateId: string;
+};
+
+/**
+ * Tells candidates they have a new invitation. Only invitations that are
+ * already linked to an account can be notified (a notification belongs to a
+ * user). Best-effort: a failure here must never undo invitations that were
+ * already saved.
+ */
+const notifyInvitedCandidates = async (notices: InvitationNotice[]) => {
+	if (notices.length === 0) return;
+
+	try {
+		await prisma.notification.createMany({
+			data: notices.map((notice) => ({
+				userId: notice.candidateId,
+				title: "New assessment invitation",
+				message: `You've been invited to take "${notice.assessmentTitle}". Open your invitations to accept.`,
+				type: "ASSESSMENT_INVITATION" as const,
+				metadata: {
+					assessmentId: notice.assessmentId,
+					invitationId: notice.invitationId,
+				},
+			})),
+		});
+	} catch (error) {
+		console.error("Failed to create invitation notifications", error);
+	}
+};
+
 /**
  * Prisma 7's `prisma-client` generator doesn't expose an `XGetPayload`
  * helper, so the result shape is derived manually from INVITATION_SELECT.
@@ -98,8 +132,9 @@ const invitationQueryBuilder = new QueryBuilder<
  * Bulk-invite by email. Skips emails already invited to this assessment
  * (unique on [assessmentId, email]) rather than erroring the whole batch.
  * If an email matches an existing CANDIDATE account, the invitation is
- * linked to that user immediately; otherwise it stays email-only until
- * getMyInvitations() opportunistically links it after they register.
+ * linked to that user immediately and that user gets a notification;
+ * otherwise it stays email-only until getMyInvitations() links it after
+ * they register (and notifies them at that point).
  *
  * Only admin-verified companies can invite candidates.
  */
@@ -181,6 +216,23 @@ const inviteCandidates = async (
 		),
 	);
 
+	// In-app notification for every invited candidate who already has an
+	// account. Best-effort, like the emails below.
+	await notifyInvitedCandidates(
+		created.flatMap((invitation) =>
+			invitation.candidateId
+				? [
+						{
+							invitationId: invitation.id,
+							assessmentId: invitation.assessmentId,
+							assessmentTitle: assessment.title,
+							candidateId: invitation.candidateId,
+						},
+					]
+				: [],
+		),
+	);
+
 	// Best-effort — a failed email send shouldn't roll back invitations that
 	// were already committed to the database.
 	await Promise.allSettled(
@@ -228,13 +280,42 @@ const getInvitationsForAssessment = async (
  * Also opportunistically links any invitations sent to this email before
  * the candidate registered — so a candidate who was invited by email,
  * then signed up afterward, still sees the invitation under "my
- * invitations" without the recruiter needing to re-invite them.
+ * invitations" without the recruiter needing to re-invite them. The
+ * candidate is notified at the moment of linking, since that is the first
+ * time there is an account to notify.
  */
 const getMyInvitations = async (userId: string, email: string) => {
-	await prisma.assessmentInvitation.updateMany({
+	const unlinked = await prisma.assessmentInvitation.findMany({
 		where: { email: email.toLowerCase(), candidateId: null },
-		data: { candidateId: userId },
+		select: {
+			id: true,
+			assessmentId: true,
+			status: true,
+			assessment: { select: { title: true } },
+		},
 	});
+
+	if (unlinked.length > 0) {
+		const claimed = await prisma.assessmentInvitation.updateMany({
+			where: { id: { in: unlinked.map((item) => item.id) }, candidateId: null },
+			data: { candidateId: userId },
+		});
+
+		// Only the request that really linked them sends the notifications,
+		// so two requests at the same moment can't notify twice.
+		if (claimed.count === unlinked.length) {
+			await notifyInvitedCandidates(
+				unlinked
+					.filter((item) => item.status === "PENDING")
+					.map((item) => ({
+						invitationId: item.id,
+						assessmentId: item.assessmentId,
+						assessmentTitle: item.assessment.title,
+						candidateId: userId,
+					})),
+			);
+		}
+	}
 
 	return prisma.assessmentInvitation.findMany({
 		where: { candidateId: userId },

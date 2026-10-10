@@ -70,9 +70,25 @@ const getPaymentById = catchAsync(async (req: Request, res: Response) => {
 	});
 });
 
+const syncPayment = catchAsync(async (req: Request, res: Response) => {
+	const currentUser = req.user as AuthenticatedUser;
+
+	const payment = await paymentService.syncPayment(req.params.id as string, {
+		id: currentUser.id,
+		role: currentUser.role,
+	});
+
+	res.status(StatusCodes.OK).json({
+		success: true,
+		message: "Payment status refreshed.",
+		data: payment,
+	});
+});
+
 export const paymentController = {
 	createCheckoutSession,
 	getMyPayments,
 	getAllPayments,
 	getPaymentById,
+	syncPayment,
 };

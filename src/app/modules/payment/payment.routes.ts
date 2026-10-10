@@ -26,6 +26,14 @@ router.get("/me", requireRole("RECRUITER"), paymentController.getMyPayments);
 
 router.get("/", requireRole("ADMIN"), paymentController.getAllPayments);
 
+// Asks Stripe whether a still-pending payment was paid. Ownership is checked
+// in the service, so only the payment's owner (or an admin) can use it.
+router.post(
+	"/:id/sync",
+	requireRole("RECRUITER", "ADMIN"),
+	paymentController.syncPayment,
+);
+
 router.get("/:id", paymentController.getPaymentById);
 
 export const paymentRoutes = router;

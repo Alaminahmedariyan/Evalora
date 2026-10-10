@@ -192,6 +192,123 @@ const createCheckoutSession = async (
   }
 };
 
+/**
+ * Marks a paid Stripe Checkout Session as PAID and activates the plan.
+ *
+ * Both the Stripe webhook and the "sync on return" endpoint call this, so
+ * whichever arrives first does the work and the other finds nothing left to
+ * do. The payment row is claimed with a conditional update, which makes the
+ * whole function safe to run twice (no double activation, no duplicate
+ * notification). Returns true only for the call that actually fulfilled it.
+ */
+const markCheckoutPaid = async (
+  session: Stripe.Checkout.Session,
+): Promise<boolean> => {
+  const paymentId = session.metadata?.paymentId;
+
+  if (!paymentId) return false;
+
+  const companyId = session.metadata?.companyId;
+  const plan = session.metadata?.plan as SubscriptionPlan | undefined;
+
+  const paymentIntent = session.payment_intent;
+  const transactionId =
+    typeof paymentIntent === "string" ? paymentIntent : paymentIntent?.id;
+
+  return prisma.$transaction(async (tx) => {
+    const claimed = await tx.payment.updateMany({
+      where: {
+        id: paymentId,
+        status: { in: ["PENDING", "PROCESSING", "FAILED"] },
+      },
+      data: {
+        status: "PAID",
+        paidAt: new Date(),
+        failedAt: null,
+        ...(transactionId ? { transactionId } : {}),
+      },
+    });
+
+    // Someone else already fulfilled this payment.
+    if (claimed.count === 0) return false;
+
+    const payment = await tx.payment.findUniqueOrThrow({
+      where: { id: paymentId },
+    });
+
+    if (companyId && plan) {
+      const currentPeriodStart = new Date();
+      const currentPeriodEnd = new Date(
+        currentPeriodStart.getTime() + 30 * 24 * 60 * 60 * 1000,
+      );
+
+      const subscription = await tx.subscription.upsert({
+        where: { companyId },
+        update: {
+          plan,
+          status: "ACTIVE",
+          currentPeriodStart,
+          currentPeriodEnd,
+          cancelAtPeriodEnd: false,
+        },
+        create: {
+          companyId,
+          plan,
+          status: "ACTIVE",
+          currentPeriodStart,
+          currentPeriodEnd,
+          cancelAtPeriodEnd: false,
+        },
+      });
+
+      await tx.payment.update({
+        where: { id: paymentId },
+        data: { subscriptionId: subscription.id },
+      });
+    }
+
+    await tx.notification.create({
+      data: {
+        userId: payment.userId,
+        title: "Payment Successful",
+        message: `Your payment of ${(Number(payment.amountMinor) / 100).toFixed(2)} ${payment.currency} was successful.`,
+        type: "PAYMENT_SUCCESS",
+      },
+    });
+
+    return true;
+  });
+};
+
+/**
+ * Marks a payment FAILED, but only while it is still waiting. A payment that
+ * was already paid is never overwritten by a late failure event.
+ */
+const markCheckoutFailed = async (paymentId: string) => {
+  const claimed = await prisma.payment.updateMany({
+    where: { id: paymentId, status: { in: ["PENDING", "PROCESSING"] } },
+    data: { status: "FAILED", failedAt: new Date() },
+  });
+
+  if (claimed.count === 0) return;
+
+  const payment = await prisma.payment.findUnique({
+    where: { id: paymentId },
+    select: { userId: true },
+  });
+
+  if (!payment) return;
+
+  await prisma.notification.create({
+    data: {
+      userId: payment.userId,
+      title: "Payment Failed",
+      message: "Your payment could not be completed. Please try again.",
+      type: "PAYMENT_FAILED",
+    },
+  });
+};
+
 const handleStripeWebhook = async (
   rawBody: Buffer,
   signature: string | undefined,
@@ -262,78 +379,8 @@ const handleStripeWebhook = async (
   if (event.type === "checkout.session.completed") {
     const session = event.data.object as Stripe.Checkout.Session;
 
-    const paymentId = session.metadata?.paymentId;
-    const companyId = session.metadata?.companyId;
-    const plan = session.metadata?.plan as SubscriptionPlan | undefined;
-
-    if (paymentId) {
-      await prisma.$transaction(async (tx) => {
-        const paymentIntent = session.payment_intent;
-
-        const transactionId =
-          typeof paymentIntent === "string"
-            ? paymentIntent
-            : paymentIntent?.id;
-
-        const payment = await tx.payment.update({
-          where: {
-            id: paymentId,
-          },
-          data: {
-            status: "PAID",
-            paidAt: new Date(),
-            ...(transactionId ? { transactionId } : {}),
-          },
-        });
-
-        if (companyId && plan) {
-          const currentPeriodStart = new Date();
-
-          const currentPeriodEnd = new Date(
-            currentPeriodStart.getTime() +
-              30 * 24 * 60 * 60 * 1000,
-          );
-
-          const subscription = await tx.subscription.upsert({
-            where: {
-              companyId,
-            },
-            update: {
-              plan,
-              status: "ACTIVE",
-              currentPeriodStart,
-              currentPeriodEnd,
-              cancelAtPeriodEnd: false,
-            },
-            create: {
-              companyId,
-              plan,
-              status: "ACTIVE",
-              currentPeriodStart,
-              currentPeriodEnd,
-              cancelAtPeriodEnd: false,
-            },
-          });
-
-          await tx.payment.update({
-            where: {
-              id: paymentId,
-            },
-            data: {
-              subscriptionId: subscription.id,
-            },
-          });
-        }
-
-        await tx.notification.create({
-          data: {
-            userId: payment.userId,
-            title: "Payment Successful",
-            message: `Your payment of ${(Number(payment.amountMinor) / 100).toFixed(2)} ${payment.currency} was successful.`,
-            type: "PAYMENT_SUCCESS",
-          },
-        });
-      });
+    if (session.payment_status === "paid") {
+      await markCheckoutPaid(session);
     }
   } else if (
     event.type === "checkout.session.expired" ||
@@ -348,25 +395,7 @@ const handleStripeWebhook = async (
     const paymentId = object.metadata?.paymentId;
 
     if (paymentId) {
-      const payment = await prisma.payment.update({
-        where: {
-          id: paymentId,
-        },
-        data: {
-          status: "FAILED",
-          failedAt: new Date(),
-        },
-      });
-
-      await prisma.notification.create({
-        data: {
-          userId: payment.userId,
-          title: "Payment Failed",
-          message:
-            "Your payment could not be completed. Please try again.",
-          type: "PAYMENT_FAILED",
-        },
-      });
+      await markCheckoutFailed(paymentId);
     }
   }
 
@@ -435,10 +464,58 @@ const getPaymentById = async (
   return payment;
 };
 
+/**
+ * Called by the billing success page. If the payment is still waiting, asks
+ * Stripe directly whether the Checkout Session was paid, so the plan is
+ * activated even when the webhook is late or misconfigured. Stripe stays the
+ * source of truth: the session is fetched by the id stored at checkout, and
+ * nothing the browser sends decides the outcome.
+ */
+const syncPayment = async (
+  id: string,
+  requester: {
+    id: string;
+    role: UserRole;
+  },
+) => {
+  // Also enforces that only the owner (or an admin) can sync this payment.
+  const payment = await getPaymentById(id, requester);
+
+  if (payment.status !== "PENDING" && payment.status !== "PROCESSING") {
+    return payment;
+  }
+
+  if (!payment.providerPaymentId) {
+    return payment;
+  }
+
+  let session: Stripe.Checkout.Session;
+
+  try {
+    session = await getStripe().checkout.sessions.retrieve(
+      payment.providerPaymentId,
+    );
+  } catch {
+    throw new AppError(
+      StatusCodes.BAD_GATEWAY,
+      "Couldn't check the payment with Stripe. Please try again.",
+    );
+  }
+
+  if (session.payment_status === "paid") {
+    await markCheckoutPaid(session);
+  } else if (session.status === "expired") {
+    await markCheckoutFailed(payment.id);
+  }
+
+  return getPaymentById(id, requester);
+};
+
 export const paymentService = {
   createCheckoutSession,
   handleStripeWebhook,
   getMyPayments,
   getAllPayments,
   getPaymentById,
+  syncPayment,
 };
