@@ -2969,6 +2969,89 @@ var createCheckoutSession = async (userId, companyId, payload) => {
     );
   }
 };
+var markCheckoutPaid = async (session) => {
+  const paymentId = session.metadata?.paymentId;
+  if (!paymentId) return false;
+  const companyId = session.metadata?.companyId;
+  const plan = session.metadata?.plan;
+  const paymentIntent = session.payment_intent;
+  const transactionId = typeof paymentIntent === "string" ? paymentIntent : paymentIntent?.id;
+  return prisma.$transaction(async (tx) => {
+    const claimed = await tx.payment.updateMany({
+      where: {
+        id: paymentId,
+        status: { in: ["PENDING", "PROCESSING", "FAILED"] }
+      },
+      data: {
+        status: "PAID",
+        paidAt: /* @__PURE__ */ new Date(),
+        failedAt: null,
+        ...transactionId ? { transactionId } : {}
+      }
+    });
+    if (claimed.count === 0) return false;
+    const payment = await tx.payment.findUniqueOrThrow({
+      where: { id: paymentId }
+    });
+    if (companyId && plan) {
+      const currentPeriodStart = /* @__PURE__ */ new Date();
+      const currentPeriodEnd = new Date(
+        currentPeriodStart.getTime() + 30 * 24 * 60 * 60 * 1e3
+      );
+      const subscription = await tx.subscription.upsert({
+        where: { companyId },
+        update: {
+          plan,
+          status: "ACTIVE",
+          currentPeriodStart,
+          currentPeriodEnd,
+          cancelAtPeriodEnd: false
+        },
+        create: {
+          companyId,
+          plan,
+          status: "ACTIVE",
+          currentPeriodStart,
+          currentPeriodEnd,
+          cancelAtPeriodEnd: false
+        }
+      });
+      await tx.payment.update({
+        where: { id: paymentId },
+        data: { subscriptionId: subscription.id }
+      });
+    }
+    await tx.notification.create({
+      data: {
+        userId: payment.userId,
+        title: "Payment Successful",
+        message: `Your payment of ${(Number(payment.amountMinor) / 100).toFixed(2)} ${payment.currency} was successful.`,
+        type: "PAYMENT_SUCCESS"
+      }
+    });
+    return true;
+  });
+};
+var markCheckoutFailed = async (paymentId) => {
+  const claimed = await prisma.payment.updateMany({
+    where: { id: paymentId, status: { in: ["PENDING", "PROCESSING"] } },
+    data: { status: "FAILED", failedAt: /* @__PURE__ */ new Date() }
+  });
+  if (claimed.count === 0) return;
+  const payment = await prisma.payment.findUnique({
+    where: { id: paymentId },
+    select: { userId: true }
+  });
+  if (!payment) return;
+  await prisma.notification.create({
+    data: {
+      userId: payment.userId,
+      title: "Payment Failed",
+      message: "Your payment could not be completed. Please try again.",
+      type: "PAYMENT_FAILED"
+    }
+  });
+};
 var handleStripeWebhook = async (rawBody, signature) => {
   const stripe2 = getStripe();
   if (!config_default.stripe.webhookSecret) {
@@ -3027,88 +3110,14 @@ var handleStripeWebhook = async (rawBody, signature) => {
   });
   if (event.type === "checkout.session.completed") {
     const session = event.data.object;
-    const paymentId = session.metadata?.paymentId;
-    const companyId = session.metadata?.companyId;
-    const plan = session.metadata?.plan;
-    if (paymentId) {
-      await prisma.$transaction(async (tx) => {
-        const paymentIntent = session.payment_intent;
-        const transactionId = typeof paymentIntent === "string" ? paymentIntent : paymentIntent?.id;
-        const payment = await tx.payment.update({
-          where: {
-            id: paymentId
-          },
-          data: {
-            status: "PAID",
-            paidAt: /* @__PURE__ */ new Date(),
-            ...transactionId ? { transactionId } : {}
-          }
-        });
-        if (companyId && plan) {
-          const currentPeriodStart = /* @__PURE__ */ new Date();
-          const currentPeriodEnd = new Date(
-            currentPeriodStart.getTime() + 30 * 24 * 60 * 60 * 1e3
-          );
-          const subscription = await tx.subscription.upsert({
-            where: {
-              companyId
-            },
-            update: {
-              plan,
-              status: "ACTIVE",
-              currentPeriodStart,
-              currentPeriodEnd,
-              cancelAtPeriodEnd: false
-            },
-            create: {
-              companyId,
-              plan,
-              status: "ACTIVE",
-              currentPeriodStart,
-              currentPeriodEnd,
-              cancelAtPeriodEnd: false
-            }
-          });
-          await tx.payment.update({
-            where: {
-              id: paymentId
-            },
-            data: {
-              subscriptionId: subscription.id
-            }
-          });
-        }
-        await tx.notification.create({
-          data: {
-            userId: payment.userId,
-            title: "Payment Successful",
-            message: `Your payment of ${(Number(payment.amountMinor) / 100).toFixed(2)} ${payment.currency} was successful.`,
-            type: "PAYMENT_SUCCESS"
-          }
-        });
-      });
+    if (session.payment_status === "paid") {
+      await markCheckoutPaid(session);
     }
   } else if (event.type === "checkout.session.expired" || event.type === "payment_intent.payment_failed") {
     const object = event.data.object;
     const paymentId = object.metadata?.paymentId;
     if (paymentId) {
-      const payment = await prisma.payment.update({
-        where: {
-          id: paymentId
-        },
-        data: {
-          status: "FAILED",
-          failedAt: /* @__PURE__ */ new Date()
-        }
-      });
-      await prisma.notification.create({
-        data: {
-          userId: payment.userId,
-          title: "Payment Failed",
-          message: "Your payment could not be completed. Please try again.",
-          type: "PAYMENT_FAILED"
-        }
-      });
+      await markCheckoutFailed(paymentId);
     }
   }
   await prisma.paymentWebhookEvent.update({
@@ -3156,12 +3165,39 @@ var getPaymentById = async (id, requester) => {
   }
   return payment;
 };
+var syncPayment = async (id, requester) => {
+  const payment = await getPaymentById(id, requester);
+  if (payment.status !== "PENDING" && payment.status !== "PROCESSING") {
+    return payment;
+  }
+  if (!payment.providerPaymentId) {
+    return payment;
+  }
+  let session;
+  try {
+    session = await getStripe().checkout.sessions.retrieve(
+      payment.providerPaymentId
+    );
+  } catch {
+    throw new appError_default(
+      import_http_status_codes7.StatusCodes.BAD_GATEWAY,
+      "Couldn't check the payment with Stripe. Please try again."
+    );
+  }
+  if (session.payment_status === "paid") {
+    await markCheckoutPaid(session);
+  } else if (session.status === "expired") {
+    await markCheckoutFailed(payment.id);
+  }
+  return getPaymentById(id, requester);
+};
 var paymentService = {
   createCheckoutSession,
   handleStripeWebhook,
   getMyPayments,
   getAllPayments,
-  getPaymentById
+  getPaymentById,
+  syncPayment
 };
 
 // src/app/modules/webhook/webhook.controller.ts
@@ -7926,6 +7962,25 @@ var invitationEmailTemplate = (assessmentTitle, expiresAt) => `
 		<p style="font-size: 13px; color: #666;">This invitation expires on ${expiresAt.toDateString()}.</p>
 	</div>
 `;
+var notifyInvitedCandidates = async (notices) => {
+  if (notices.length === 0) return;
+  try {
+    await prisma.notification.createMany({
+      data: notices.map((notice) => ({
+        userId: notice.candidateId,
+        title: "New assessment invitation",
+        message: `You've been invited to take "${notice.assessmentTitle}". Open your invitations to accept.`,
+        type: "ASSESSMENT_INVITATION",
+        metadata: {
+          assessmentId: notice.assessmentId,
+          invitationId: notice.invitationId
+        }
+      }))
+    });
+  } catch (error) {
+    console.error("Failed to create invitation notifications", error);
+  }
+};
 var invitationQueryBuilder = new QueryBuilder(
   prisma.assessmentInvitation,
   {
@@ -8009,6 +8064,18 @@ var inviteCandidates = async (assessmentId, companyId, payload) => {
       })
     )
   );
+  await notifyInvitedCandidates(
+    created.flatMap(
+      (invitation) => invitation.candidateId ? [
+        {
+          invitationId: invitation.id,
+          assessmentId: invitation.assessmentId,
+          assessmentTitle: assessment.title,
+          candidateId: invitation.candidateId
+        }
+      ] : []
+    )
+  );
   await Promise.allSettled(
     created.map(
       (invitation) => sendEmail({
@@ -8040,10 +8107,31 @@ var getInvitationsForAssessment = async (assessmentId, companyId, query) => {
   return invitationQueryBuilder.execute(query, { assessmentId });
 };
 var getMyInvitations = async (userId, email) => {
-  await prisma.assessmentInvitation.updateMany({
+  const unlinked = await prisma.assessmentInvitation.findMany({
     where: { email: email.toLowerCase(), candidateId: null },
-    data: { candidateId: userId }
+    select: {
+      id: true,
+      assessmentId: true,
+      status: true,
+      assessment: { select: { title: true } }
+    }
   });
+  if (unlinked.length > 0) {
+    const claimed = await prisma.assessmentInvitation.updateMany({
+      where: { id: { in: unlinked.map((item) => item.id) }, candidateId: null },
+      data: { candidateId: userId }
+    });
+    if (claimed.count === unlinked.length) {
+      await notifyInvitedCandidates(
+        unlinked.filter((item) => item.status === "PENDING").map((item) => ({
+          invitationId: item.id,
+          assessmentId: item.assessmentId,
+          assessmentTitle: item.assessment.title,
+          candidateId: userId
+        }))
+      );
+    }
+  }
   return prisma.assessmentInvitation.findMany({
     where: { candidateId: userId },
     select: INVITATION_SELECT,
@@ -8545,11 +8633,24 @@ var getPaymentById2 = catchAsync(async (req, res) => {
     data: payment
   });
 });
+var syncPayment2 = catchAsync(async (req, res) => {
+  const currentUser = req.user;
+  const payment = await paymentService.syncPayment(req.params.id, {
+    id: currentUser.id,
+    role: currentUser.role
+  });
+  res.status(import_http_status_codes37.StatusCodes.OK).json({
+    success: true,
+    message: "Payment status refreshed.",
+    data: payment
+  });
+});
 var paymentController = {
   createCheckoutSession: createCheckoutSession2,
   getMyPayments: getMyPayments2,
   getAllPayments: getAllPayments2,
-  getPaymentById: getPaymentById2
+  getPaymentById: getPaymentById2,
+  syncPayment: syncPayment2
 };
 
 // src/app/modules/payment/payment.validation.ts
@@ -8576,6 +8677,11 @@ router12.post(
 );
 router12.get("/me", requireRole("RECRUITER"), paymentController.getMyPayments);
 router12.get("/", requireRole("ADMIN"), paymentController.getAllPayments);
+router12.post(
+  "/:id/sync",
+  requireRole("RECRUITER", "ADMIN"),
+  paymentController.syncPayment
+);
 router12.get("/:id", paymentController.getPaymentById);
 var paymentRoutes = router12;
 
@@ -9242,7 +9348,7 @@ var resultService = {
 // src/app/modules/result/result.controller.ts
 var getResultByAttemptId2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
-  const companyId = await getCompanyIdForUser(currentUser, req) ?? void 0;
+  const companyId = currentUser.role === "CANDIDATE" ? void 0 : await getCompanyIdForUser(currentUser, req) ?? void 0;
   const result = await resultService.getResultByAttemptId(
     req.params.attemptId,
     {

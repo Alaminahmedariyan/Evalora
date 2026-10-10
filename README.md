@@ -1,32 +1,60 @@
 # Evalora Backend
 
-AI-powered assessment platform backend built with Express, Prisma, and Better Auth.
+AI-powered assessment platform backend built with Express, Prisma, and Better Auth. Enables recruiters to create coding/MCQ/written assessments, invite candidates, and evaluate submissions with automated and manual grading.
 
-## Tech Stack
+## 🔗 Live Links
+- Live Frontend: https://evalora-client.vercel.app
+- Live Backend: https://evalora-server.vercel.app
+- API Documentation: https://evalora-server.vercel.app/api-docs
 
-- **Runtime:** Node.js + Express 5
-- **Language:** TypeScript
-- **Database:** PostgreSQL (Prisma ORM)
-- **Authentication:** Better Auth (email/password + OAuth)
-- **File Storage:** Cloudinary
-- **Payments:** Stripe
-- **Email:** Resend / Nodemailer
-- **Security:** Helmet, CORS, Rate Limiting, Sanitization
-- **Validation:** Zod
-- **Linting:** Biome
+## 🔑 Demo Credentials
+| Role | Email | Password |
+|---|---|---|
+| Admin | alaminahmedariyan2022@gmail.com | ChangeMe123! |
+| Candidate | candidate1@demo.com | Candidate@123 |
+| Recruiter | candidate2@demo.com | Candidate@123 |
 
-## Project Structure
+## ✨ Features
+- **Multi-role authentication** — Admin, Recruiter, Candidate with role-based access control
+- **Assessment builder** — Create assessments with MCQ, Coding, and Written problem types
+- **Version control** — Assessment versioning with restore capability
+- **Candidate invitations** — Email-based invitation flow with accept/decline
+- **Real-time attempts** — Timed assessment attempts with auto-submit
+- **Proctoring events** — Tab-switch detection and logging
+- **Hybrid evaluation** — Auto-graded MCQ + manual grading for coding/written
+- **Results & rankings** — Score computation, leaderboards, rank calculation
+- **Subscription billing** — Stripe integration for PRO plan upgrades
+- **Company verification** — Admin-verified company profiles
+- **GDPR consents** — Marketing/analytics consent management
+- **Notifications** — In-app notifications with read/unread tracking
+- **File uploads** — Avatars, logos, resumes via Cloudinary
+- **Email OTP** — Password reset and email verification via Resend/SMTP
+- **OAuth login** — Google and GitHub authentication
 
+## 🛠️ Tech Stack
+- **Backend:** Node.js, Express 5, TypeScript, PostgreSQL, Prisma ORM
+- **Authentication:** Better Auth (email/password + Google/GitHub OAuth)
+- **Payments:** Stripe (checkout sessions, webhooks)
+- **Email:** Resend (primary), Nodemailer/SMTP (fallback)
+- **File Storage:** Cloudinary (avatars, logos, resumes)
+- **Caching/Rate Limiting:** Redis (Upstash)
+- **Validation:** Zod schemas
+- **Security:** Helmet, CORS, Rate Limiting, Body Sanitization
+- **Captcha:** hCaptcha (optional)
+- **Linting/Formatting:** Biome
+- **Package Manager:** pnpm
+
+## 📁 Project Structure
 ```
 src/
 ├── app/
 │   ├── config/           # Environment config (Zod validated)
-│   ├── middlewares/       # Auth, upload, rate-limit, validation
+│   ├── middlewares/      # Auth, upload, rate-limit, validation
 │   ├── modules/          # Feature modules
 │   │   ├── auth/         # Authentication (Better Auth)
 │   │   ├── user/         # User management
 │   │   ├── company/      # Company & subscriptions
-│   │   ├── problem/      # Problem bank (coding questions)
+│   │   ├── problem/      # Problem bank (MCQ, Coding, Written)
 │   │   ├── assessment/   # Assessments & versions
 │   │   ├── candidate/    # Candidate profiles
 │   │   ├── attempt/      # Assessment attempts
@@ -39,119 +67,49 @@ src/
 │   │   ├── admin/        # Admin dashboard
 │   │   └── webhook/      # Stripe webhooks
 │   └── routes/           # Route aggregation
-├── lib/                  # Prisma, Cloudinary, Stripe, Redis
+├── lib/                  # Prisma, Cloudinary, Stripe, Redis clients
 ├── app.ts                # Express app setup
 └── server.ts             # Server entry point
 ```
 
-## Getting Started
-
-### Prerequisites
-
-- Node.js >= 20
-- PostgreSQL
-- pnpm >= 11
-- Cloudinary account
-- Stripe account (optional for payments)
-
-### Installation
-
+## 🚀 Local Setup
 ```bash
+# backend
+git clone <backend-repo>
+cd <backend>
 pnpm install
-```
 
-### Environment Variables
+# create .env with required keys (see .env.example)
+cp .env.example .env
+# edit .env with your credentials
 
-Create a `.env` file in the root:
+pnpm generate      # Generate Prisma client
+pnpm migrate       # Run migrations
+pnpm seed          # Seed demo accounts
+pnpm dev           # Start dev server on http://localhost:5000
 
-```env
-# Core
-NODE_ENV=development
-PORT=5000
-CLIENT_URL=http://localhost:3000
-
-# Database
-DATABASE_URL=postgresql://user:password@localhost:5432/evalora
-
-# Better Auth
-BETTER_AUTH_SECRET=your-secret-key-min-16-chars
-
-# OAuth (optional)
-GOOGLE_CLIENT_ID=
-GOOGLE_CLIENT_SECRET=
-GITHUB_CLIENT_ID=
-GITHUB_CLIENT_SECRET=
-
-# Cloudinary
-CLOUDINARY_CLOUD_NAME=
-CLOUDINARY_API_KEY=
-CLOUDINARY_API_SECRET=
-
-# Stripe (optional)
-STRIPE_SECRET_KEY=
-STRIPE_WEBHOOK_SECRET=
-
-# Email (optional)
-RESEND_API_KEY=
-SMTP_HOST=
-SMTP_PORT=
-SMTP_USER=
-SMTP_PASS=
-
-# Redis (optional)
-REDIS_URL=
-
-# reCAPTCHA (optional)
-HCAPTCHA_SECRET_KEY=
-```
-
-### Database Setup
-
-```bash
-# Generate Prisma client
-pnpm generate
-
-# Run migrations
-pnpm migrate
-
-# Seed database
-pnpm seed
-```
-
-### Run Development Server
-
-```bash
-pnpm dev
-```
-
-Server runs on `http://localhost:5000`
-
-### Build for Production
-
-```bash
-pnpm build
-pnpm start
+# frontend (separate repo)
+git clone <frontend-repo>
+cd <frontend>
+pnpm install
+pnpm dev           # Start on http://localhost:3000
 ```
 
 ## API Base URL
-
 ```
 /api/v1
 ```
-
 All endpoints below are prefixed with `/api/v1`.
 
 ## API Endpoints
 
 ### Health
-
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/` | API status |
 | GET | `/health` | Health check (DB connectivity) |
 
 ### Authentication (`/auth`)
-
 Better Auth handles these routes automatically under `/api/auth/*splat`.
 
 | Method | Path | Description |
@@ -169,7 +127,6 @@ Better Auth handles these routes automatically under `/api/auth/*splat`.
 **Supported OAuth:** Google, GitHub
 
 ### Users (`/users`)
-
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | PATCH | `/users/me` | Any | Update own profile (supports image upload) |
@@ -178,15 +135,17 @@ Better Auth handles these routes automatically under `/api/auth/*splat`.
 | PATCH | `/users/:id/role` | Admin | Update user role |
 | PATCH | `/users/:id/status` | Admin | Update user status |
 | DELETE | `/users/:id` | Admin | Delete user |
+| GET | `/users/me/export` | Any | Export own data (GDPR) |
+| POST | `/users/me/delete` | Any | Delete own account |
 
 ### Companies (`/companies`)
-
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | POST | `/companies/register` | Any | Register company (promotes to RECRUITER) |
 | GET | `/companies/` | Public | Get all verified companies |
 | GET | `/companies/me` | Any | Get own company |
 | PATCH | `/companies/me` | Recruiter | Update company (supports logo upload) |
+| POST | `/companies/me/request-verification` | Recruiter | Request admin verification |
 | GET | `/companies/:id` | Public | Get company by ID |
 | PATCH | `/companies/:id/verify` | Admin | Verify company |
 | DELETE | `/companies/:id` | Any | Delete company |
@@ -195,7 +154,6 @@ Better Auth handles these routes automatically under `/api/auth/*splat`.
 | POST | `/companies/me/subscription/cancel` | Recruiter | Cancel subscription |
 
 ### Problems (`/problems`)
-
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | POST | `/problems/` | Recruiter | Create problem |
@@ -205,7 +163,6 @@ Better Auth handles these routes automatically under `/api/auth/*splat`.
 | DELETE | `/problems/:id` | Recruiter | Delete problem |
 
 ### Assessments (`/assessments`)
-
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | POST | `/assessments/` | Recruiter | Create assessment |
@@ -220,7 +177,6 @@ Better Auth handles these routes automatically under `/api/auth/*splat`.
 | PATCH | `/versions/:id/restore` | Recruiter | Restore old version |
 
 ### Candidates (`/candidates`)
-
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/candidates/me` | Candidate | Get own profile |
@@ -229,7 +185,6 @@ Better Auth handles these routes automatically under `/api/auth/*splat`.
 | GET | `/candidates/:id` | Recruiter/Admin | Get candidate profile |
 
 ### Attempts (`/attempts`)
-
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | POST | `/attempts/start` | Candidate | Start assessment attempt |
@@ -239,10 +194,9 @@ Better Auth handles these routes automatically under `/api/auth/*splat`.
 | POST | `/attempts/:id/submit` | Candidate | Submit attempt |
 | POST | `/attempts/:id/proctoring-events` | Candidate | Record proctoring event |
 | GET | `/attempts/:id/proctoring-events` | Any | Get proctoring events |
-| GET | `/attempts/proctoring-events/:eventId` | Any | Get single proctoring event |
+| GET | `/attempts/:id/proctoring-events/:eventId` | Any | Get single proctoring event |
 
 ### Evaluations (`/evaluations`)
-
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/evaluations/attempts/:attemptId/submissions` | Recruiter/Admin | Get submissions |
@@ -251,15 +205,14 @@ Better Auth handles these routes automatically under `/api/auth/*splat`.
 | PATCH | `/evaluations/submissions/:id` | Recruiter/Admin | Evaluate submission |
 
 ### Results (`/results`)
-
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/results/attempts/:attemptId` | Any | Get result by attempt |
 | GET | `/results/assessments/:assessmentId` | Recruiter/Admin | Get results for assessment |
 | POST | `/results/assessments/:assessmentId/compute-ranks` | Recruiter | Compute ranks |
+| PATCH | `/results/assessments/:assessmentId/release` | Recruiter | Release results to candidates |
 
 ### Invitations (`/invitations`)
-
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | POST | `/invitations/assessments/:assessmentId` | Recruiter | Invite candidates |
@@ -271,16 +224,15 @@ Better Auth handles these routes automatically under `/api/auth/*splat`.
 | DELETE | `/invitations/:id` | Recruiter | Cancel invitation |
 
 ### Payments (`/payments`)
-
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | POST | `/payments/checkout` | Recruiter | Create Stripe checkout session |
 | GET | `/payments/me` | Recruiter | My payments |
 | GET | `/payments/` | Admin | All payments |
 | GET | `/payments/:id` | Any | Get payment |
+| POST | `/payments/:id/sync` | Recruiter/Admin | Sync payment status with Stripe |
 
 ### Notifications (`/notifications`)
-
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/notifications/me` | Any | My notifications |
@@ -290,14 +242,12 @@ Better Auth handles these routes automatically under `/api/auth/*splat`.
 | DELETE | `/notifications/:id` | Any | Delete notification |
 
 ### Admin (`/admin`)
-
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/admin/dashboard-stats` | Admin | Dashboard statistics |
 | GET | `/admin/audit-logs` | Admin | Audit logs |
 
 ### Consents (`/consents`)
-
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/consents/me` | Any | My consents |
@@ -305,13 +255,11 @@ Better Auth handles these routes automatically under `/api/auth/*splat`.
 | DELETE | `/consents/me/:consentType` | Any | Revoke consent |
 
 ### Webhooks (`/webhooks`)
-
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | POST | `/webhooks/stripe` | Stripe | Stripe webhook handler |
 
 ## Roles
-
 | Role | Description |
 |------|-------------|
 | `CANDIDATE` | Can take assessments, manage profile |
@@ -319,7 +267,6 @@ Better Auth handles these routes automatically under `/api/auth/*splat`.
 | `ADMIN` | Full access, user management, verification, dashboard |
 
 ## File Uploads
-
 | Field | Route | Max Size | Destination |
 |-------|-------|----------|-------------|
 | `image` | `PATCH /users/me` | 5 MB | Cloudinary `avatars/` |
@@ -327,7 +274,6 @@ Better Auth handles these routes automatically under `/api/auth/*splat`.
 | `resume` | `PATCH /candidates/me` | 20 MB | Cloudinary `resumes/` |
 
 ## Response Format
-
 ```json
 {
   "success": true,
@@ -337,7 +283,6 @@ Better Auth handles these routes automatically under `/api/auth/*splat`.
 ```
 
 Error response:
-
 ```json
 {
   "success": false,
@@ -348,7 +293,6 @@ Error response:
 ```
 
 ## Scripts
-
 | Command | Description |
 |---------|-------------|
 | `pnpm dev` | Start dev server with hot reload |

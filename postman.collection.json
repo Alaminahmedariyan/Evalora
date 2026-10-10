@@ -820,6 +820,82 @@
 						"description": "Soft delete. Same caution as above — don't run against an account you still need."
 					},
 					"response": []
+				},
+				{
+					"name": "Export My Data (Candidate)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{candidateToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/users/me/export",
+							"host": ["{{baseUrl}}"],
+							"path": ["users", "me", "export"]
+						},
+						"description": "Exports all personal data for the authenticated user (GDPR/CCPA compliance)."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Delete My Account (Candidate)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{candidateToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/users/me/delete",
+							"host": ["{{baseUrl}}"],
+							"path": ["users", "me", "delete"]
+						},
+						"description": "Permanently deletes the authenticated user's account (soft delete). Requires password confirmation.",
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"password\": \"{{candidate1Password}}\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
 				}
 			],
 			"description": ""
@@ -1104,6 +1180,68 @@
 						]
 					},
 					"response": []
+				},
+				{
+					"name": "Request Company Verification (Recruiter)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{recruiterToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/companies/me/request-verification",
+							"host": ["{{baseUrl}}"],
+							"path": ["companies", "me", "request-verification"]
+						},
+						"description": "Requests admin verification for the company. Only available to RECRUITER role."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Delete Company (Owner or Admin)",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{recruiterToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/companies/{{companyId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["companies", "{{companyId}}"]
+						},
+						"description": "Deletes the company. Can be called by the company owner (recruiter) or an admin."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
 				}
 			],
 			"description": ""
@@ -1560,6 +1698,37 @@
 						}
 					},
 					"response": []
+				},
+				{
+					"name": "Delete Problem (Recruiter)",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{recruiterToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/problems/{{mcqProblemId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["problems", "{{mcqProblemId}}"]
+						},
+						"description": "Deletes a problem. Only the owning recruiter or an admin can delete."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
 				}
 			],
 			"description": ""
@@ -1567,7 +1736,7 @@
 		{
 			"name": "6. Assessment",
 			"item": [
-				{
+{
 					"name": "Create Assessment",
 					"request": {
 						"method": "POST",
@@ -1609,6 +1778,51 @@
 									"pm.test('Status is 201', () => pm.response.to.have.status(201));",
 									"const json = pm.response.json();",
 									"if (json.data) pm.collectionVariables.set('assessmentId', json.data.id);"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Update Assessment (Recruiter)",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{recruiterToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/assessments/{{assessmentId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["assessments", "{{assessmentId}}"]
+						},
+						"description": "Updates an assessment (only draft assessments can be updated).",
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"title\": \"Junior Full-Stack Developer Assessment (Updated)\",\n  \"description\": \"Updated screening assessment.\",\n  \"instructions\": \"You have 90 minutes. Do not switch tabs.\",\n  \"durationMinutes\": 90,\n  \"totalMarks\": 25,\n  \"passingMarks\": 15,\n  \"maxAttempts\": 2\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
 								]
 							}
 						}
@@ -1966,6 +2180,68 @@
 						]
 					},
 					"response": []
+				},
+				{
+					"name": "Get Invitation By Id",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{recruiterToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/invitations/{{invitationId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["invitations", "{{invitationId}}"]
+						},
+						"description": "Get a single invitation by ID. Accessible by owning recruiter, invited candidate, or admin."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Cancel Invitation (Recruiter)",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{recruiterToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/invitations/{{invitationId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["invitations", "{{invitationId}}"]
+						},
+						"description": "Cancels a pending invitation. Only the owning recruiter or an admin can cancel."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
 				}
 			],
 			"description": ""
@@ -2306,6 +2582,37 @@
 						]
 					},
 					"response": []
+				},
+				{
+					"name": "Get Proctoring Event By Id",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{recruiterToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/attempts/{{attemptId}}/proctoring-events/{{proctoringEventId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["attempts", "{{attemptId}}", "proctoring-events", "{{proctoringEventId}}"]
+						},
+						"description": "Get a specific proctoring event by ID. Requires proctoringEventId variable to be set.",
+						"event": [
+							{
+								"listen": "test",
+								"script": {
+									"type": "text/javascript",
+									"exec": [
+										"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+									]
+								}
+							}
+						]
+					},
+					"response": []
 				}
 			],
 			"description": ""
@@ -2585,7 +2892,7 @@
 					},
 					"response": []
 				},
-				{
+{
 					"name": "Compute Ranks (Recruiter)",
 					"request": {
 						"method": "POST",
@@ -2599,16 +2906,42 @@
 						"url": {
 							"raw": "{{baseUrl}}/results/assessments/{{assessmentId}}/compute-ranks",
 							"host": ["{{baseUrl}}"],
-							"path": [
-								"results",
-								"assessments",
-								"{{assessmentId}}",
-								"compute-ranks"
-							]
+							"path": ["results", "assessments", "{{assessmentId}}", "compute-ranks"]
 						},
 						"description": ""
 					},
 					"response": []
+				},
+				{
+					"name": "Release Results (Recruiter)",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{recruiterToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/results/assessments/{{assessmentId}}/release",
+							"host": ["{{baseUrl}}"],
+							"path": ["results", "assessments", "{{assessmentId}}", "release"]
+						},
+						"description": "Releases results to candidates. Only the owning recruiter can release results."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
 				},
 				{
 					"name": "Get Result By Attempt Id",
@@ -2794,6 +3127,37 @@
 					"response": []
 				},
 				{
+					"name": "Sync Payment (Recruiter/Admin)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{recruiterToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/payments/{{paymentId}}/sync",
+							"host": ["{{baseUrl}}"],
+							"path": ["payments", "{{paymentId}}", "sync"]
+						},
+						"description": "Syncs payment status with Stripe. Can be called by payment owner (recruiter) or admin."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
 					"name": "Stripe Webhook (not called directly from Postman)",
 					"request": {
 						"method": "POST",
@@ -2927,6 +3291,37 @@
 					"response": []
 				},
 				{
+					"name": "Delete Notification",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{candidateToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/notifications/{{notificationId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["notifications", "{{notificationId}}"]
+						},
+						"description": "Deletes a notification by ID. Only the notification owner can delete."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
 					"name": "Get My Notifications",
 					"request": {
 						"method": "GET",
@@ -2990,7 +3385,120 @@
 			"description": ""
 		},
 		{
-			"name": "13. Admin",
+			"name": "13. Consent",
+			"item": [
+				{
+					"name": "Get My Consents",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{candidateToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/consents/me",
+							"host": ["{{baseUrl}}"],
+							"path": ["consents", "me"]
+						},
+						"description": "Gets the current user's consent preferences."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Update My Consent",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{candidateToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/consents/me",
+							"host": ["{{baseUrl}}"],
+							"path": ["consents", "me"]
+						},
+						"description": "Updates a consent preference (e.g., MARKETING, ANALYTICS).",
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"consentType\": \"MARKETING\",\n  \"granted\": true\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Revoke Consent",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{candidateToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/consents/me/MARKETING",
+							"host": ["{{baseUrl}}"],
+							"path": ["consents", "me", "MARKETING"]
+						},
+						"description": "Revokes a specific consent type. Replace MARKETING with the consent type to revoke."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				}
+			],
+			"description": ""
+		},
+		{
+			"name": "14. Admin",
 			"item": [
 				{
 					"name": "Get Dashboard Stats",
@@ -3076,7 +3584,719 @@
 			"description": ""
 		},
 		{
-			"name": "14. Error Handling Demos",
+			"name": "15. Blog",
+			"item": [
+				{
+					"name": "Get Published Posts (Public)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/blog/posts?page=1&limit=10",
+							"host": ["{{baseUrl}}"],
+							"path": ["blog", "posts"],
+							"query": [
+								{
+									"key": "page",
+									"value": "1"
+								},
+								{
+									"key": "limit",
+									"value": "10"
+								}
+							]
+						},
+						"description": "Gets paginated list of published blog posts."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Get Published Post By Slug (Public)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/blog/posts/{{postSlug}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["blog", "posts", "{{postSlug}}"]
+						},
+						"description": "Gets a single published blog post by slug. Set postSlug variable first."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Get Categories (Public)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/blog/categories",
+							"host": ["{{baseUrl}}"],
+							"path": ["blog", "categories"]
+						},
+						"description": "Gets all blog categories."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Get Tags (Public)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/blog/tags",
+							"host": ["{{baseUrl}}"],
+							"path": ["blog", "tags"]
+						},
+						"description": "Gets all blog tags."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Get Author (Public)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/blog/authors/{{authorId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["blog", "authors", "{{authorId}}"]
+						},
+						"description": "Gets author information by ID."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Admin: Get All Posts (Admin)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{adminToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/blog/admin/posts?page=1&limit=10",
+							"host": ["{{baseUrl}}"],
+							"path": ["blog", "admin", "posts"],
+							"query": [
+								{
+									"key": "page",
+									"value": "1"
+								},
+								{
+									"key": "limit",
+									"value": "10"
+								}
+							]
+						},
+						"description": "Gets all posts (including drafts) for admin."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Admin: Get Post By Id (Admin)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{adminToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/blog/admin/posts/{{postId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["blog", "admin", "posts", "{{postId}}"]
+						},
+						"description": "Gets a single post by ID (admin view)."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Admin: Create Post (Admin)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{adminToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/blog/admin/posts",
+							"host": ["{{baseUrl}}"],
+							"path": ["blog", "admin", "posts"]
+						},
+						"description": "Creates a new blog post.",
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"title\": \"New Blog Post\",\n  \"slug\": \"new-blog-post\",\n  \"excerpt\": \"A short excerpt\",\n  \"content\": \"Full content here\",\n  \"coverImage\": \"https://example.com/cover.jpg\",\n  \"categoryIds\": [],\n  \"tagIds\": [],\n  \"status\": \"DRAFT\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 201', () => pm.response.to.have.status(201));",
+									"const json = pm.response.json();",
+									"if (json.data) pm.collectionVariables.set('postId', json.data.id);"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Admin: Update Post (Admin)",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{adminToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/blog/admin/posts/{{postId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["blog", "admin", "posts", "{{postId}}"]
+						},
+						"description": "Updates an existing blog post.",
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"title\": \"Updated Blog Post\",\n  \"content\": \"Updated content here\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Admin: Publish Post (Admin)",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{adminToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/blog/admin/posts/{{postId}}/publish",
+							"host": ["{{baseUrl}}"],
+							"path": ["blog", "admin", "posts", "{{postId}}", "publish"]
+						},
+						"description": "Publishes a draft post."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Admin: Unpublish Post (Admin)",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{adminToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/blog/admin/posts/{{postId}}/unpublish",
+							"host": ["{{baseUrl}}"],
+							"path": ["blog", "admin", "posts", "{{postId}}", "unpublish"]
+						},
+						"description": "Unpublishes a published post."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Admin: Delete Post (Admin)",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{adminToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/blog/admin/posts/{{postId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["blog", "admin", "posts", "{{postId}}"]
+						},
+						"description": "Deletes a blog post."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Admin: Create Category (Admin)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{adminToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/blog/admin/categories",
+							"host": ["{{baseUrl}}"],
+							"path": ["blog", "admin", "categories"]
+						},
+						"description": "Creates a new blog category.",
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"New Category\",\n  \"slug\": \"new-category\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 201', () => pm.response.to.have.status(201));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Admin: Update Category (Admin)",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{adminToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/blog/admin/categories/{{categoryId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["blog", "admin", "categories", "{{categoryId}}"]
+						},
+						"description": "Updates a blog category.",
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Updated Category\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Admin: Delete Category (Admin)",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{adminToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/blog/admin/categories/{{categoryId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["blog", "admin", "categories", "{{categoryId}}"]
+						},
+						"description": "Deletes a blog category."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Admin: Upload Cover Image (Admin)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{adminToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/blog/admin/upload-cover",
+							"host": ["{{baseUrl}}"],
+							"path": ["blog", "admin", "upload-cover"]
+						},
+						"description": "Uploads a cover image for blog posts.",
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "image",
+									"type": "file",
+									"src": []
+								}
+							]
+						}
+					},
+					"response": []
+				}
+			],
+			"description": ""
+		},
+		{
+			"name": "16. Contact",
+			"item": [
+				{
+					"name": "Send Contact Message (Public)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/contact",
+							"host": ["{{baseUrl}}"],
+							"path": ["contact"]
+						},
+						"description": "Sends a contact message. Rate limited per IP.",
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"John Doe\",\n  \"email\": \"john@example.com\",\n  \"subject\": \"Inquiry\",\n  \"message\": \"Hello, I have a question about...\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 201', () => pm.response.to.have.status(201));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Admin: Get Contact Messages (Admin)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{adminToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/contact/admin/messages?page=1&limit=10",
+							"host": ["{{baseUrl}}"],
+							"path": ["contact", "admin", "messages"],
+							"query": [
+								{
+									"key": "page",
+									"value": "1"
+								},
+								{
+									"key": "limit",
+									"value": "10"
+								}
+							]
+						},
+						"description": "Gets all contact messages for admin."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Admin: Update Message Status (Admin)",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{adminToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/contact/admin/messages/{{messageId}}/status",
+							"host": ["{{baseUrl}}"],
+							"path": ["contact", "admin", "messages", "{{messageId}}", "status"]
+						},
+						"description": "Updates the status of a contact message.",
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"status\": \"READ\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Admin: Delete Message (Admin)",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{adminToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/contact/admin/messages/{{messageId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["contact", "admin", "messages", "{{messageId}}"]
+						},
+						"description": "Deletes a contact message."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));"
+								]
+							}
+						}
+					]
+				}
+			],
+			"description": ""
+		},
+		{
+			"name": "17. Error Handling Demos",
 			"item": [
 				{
 					"name": "Validation Error Example (bad email)",
