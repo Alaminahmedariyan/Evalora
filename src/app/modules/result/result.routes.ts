@@ -17,6 +17,12 @@ router.get(
 	resultController.getResultsForAssessment,
 );
 
+router.patch(
+	"/assessments/:assessmentId/release",
+	requireRole("RECRUITER"),
+	resultController.releaseResults,
+);
+
 router.post(
 	"/assessments/:assessmentId/compute-ranks",
 	requireRole("RECRUITER"),

@@ -3527,6 +3527,26 @@ var requireAuth = catchAsync(
     next();
   }
 );
+var optionalAuth = catchAsync(
+  async (req, _res, next) => {
+    try {
+      const session = await auth.api.getSession({
+        headers: (0, import_node.fromNodeHeaders)(req.headers)
+      });
+      if (session?.user) {
+        const account = await prisma.user.findUnique({
+          where: { id: session.user.id },
+          select: { status: true, deletedAt: true }
+        });
+        if (account && !account.deletedAt && account.status !== "SUSPENDED") {
+          req.user = session.user;
+        }
+      }
+    } catch {
+    }
+    next();
+  }
+);
 var requireRole = (...roles) => {
   return catchAsync(
     async (req, _res, next) => {
@@ -3728,7 +3748,7 @@ var validateRequest = (schema) => {
 };
 
 // src/app/modules/assessment/assessment.controller.ts
-var import_http_status_codes15 = require("http-status-codes");
+var import_http_status_codes16 = require("http-status-codes");
 
 // src/lib/getCompanyIdForUser.ts
 var import_http_status_codes12 = require("http-status-codes");
@@ -3756,7 +3776,7 @@ async function getCompanyIdForUser(user, _req) {
 }
 
 // src/app/modules/assessment/assessment.service.ts
-var import_http_status_codes14 = require("http-status-codes");
+var import_http_status_codes15 = require("http-status-codes");
 
 // src/lib/prismaTenantScope.ts
 function withTenantScope(where, companyId) {
@@ -3850,6 +3870,24 @@ var assertCanInvite = async (companyId, count) => {
   }
 };
 
+// src/app/utils/assertCompanyVerified.ts
+var import_http_status_codes14 = require("http-status-codes");
+var assertCompanyVerified = async (companyId) => {
+  const company = await prisma.company.findFirst({
+    where: { id: companyId, deletedAt: null },
+    select: { isVerified: true }
+  });
+  if (!company) {
+    throw new appError_default(import_http_status_codes14.StatusCodes.NOT_FOUND, "Company not found.");
+  }
+  if (!company.isVerified) {
+    throw new appError_default(
+      import_http_status_codes14.StatusCodes.FORBIDDEN,
+      "Your company must be verified by an admin before you can do this."
+    );
+  }
+};
+
 // src/app/utils/generateUniqueSlug.ts
 var slugify = (input) => input.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "item";
 var generateUniqueSlug = async (source, isTaken) => {
@@ -3925,6 +3963,27 @@ var ASSESSMENT_LIST_SELECT = {
   createdAt: true
 };
 
+// src/app/modules/result/result.notification.ts
+var notifyResultsReleased = async (assessmentId, assessmentTitle) => {
+  const results = await prisma.result.findMany({
+    where: { assessmentId, status: { in: ["PASSED", "FAILED"] } },
+    select: {
+      attemptId: true,
+      attempt: { select: { candidateId: true } }
+    }
+  });
+  if (results.length === 0) return;
+  await prisma.notification.createMany({
+    data: results.map((result) => ({
+      userId: result.attempt.candidateId,
+      title: "Result ready",
+      message: `Your result for "${assessmentTitle}" is ready to view.`,
+      type: "ASSESSMENT_RESULT",
+      metadata: { assessmentId, attemptId: result.attemptId }
+    }))
+  });
+};
+
 // src/app/modules/assessment/assessment.service.ts
 var assessmentQueryBuilder = new QueryBuilder(prisma.assessment, {
   searchableFields: ["title", "description"],
@@ -3962,7 +4021,7 @@ var assertProblemsBelongToCompany = async (companyId, problemIds) => {
   });
   if (found.length !== new Set(problemIds).size) {
     throw new appError_default(
-      import_http_status_codes14.StatusCodes.BAD_REQUEST,
+      import_http_status_codes15.StatusCodes.BAD_REQUEST,
       "One or more problems were not found in your company's problem bank."
     );
   }
@@ -4037,7 +4096,7 @@ var getAssessmentById = async (id, companyId) => {
     select: ASSESSMENT_DETAIL_SELECT
   });
   if (!assessment) {
-    throw new appError_default(import_http_status_codes14.StatusCodes.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(import_http_status_codes15.StatusCodes.NOT_FOUND, "Assessment not found.");
   }
   return assessment;
 };
@@ -4052,11 +4111,11 @@ var updateAssessment = async (id, companyId, payload) => {
     ) ?? {}
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes14.StatusCodes.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(import_http_status_codes15.StatusCodes.NOT_FOUND, "Assessment not found.");
   }
   if (existing.status !== "DRAFT") {
     throw new appError_default(
-      import_http_status_codes14.StatusCodes.CONFLICT,
+      import_http_status_codes15.StatusCodes.CONFLICT,
       "Only DRAFT assessments can be edited. Close this one and create a new assessment instead."
     );
   }
@@ -4072,7 +4131,7 @@ var updateAssessment = async (id, companyId, payload) => {
     );
     if (marksSum !== effectiveTotalMarks) {
       throw new appError_default(
-        import_http_status_codes14.StatusCodes.BAD_REQUEST,
+        import_http_status_codes15.StatusCodes.BAD_REQUEST,
         `Sum of problem marks (${marksSum}) must equal totalMarks (${effectiveTotalMarks}).`
       );
     }
@@ -4080,7 +4139,7 @@ var updateAssessment = async (id, companyId, payload) => {
   const effectivePassingMarks = payload.passingMarks ?? existing.passingMarks;
   if (effectivePassingMarks > effectiveTotalMarks) {
     throw new appError_default(
-      import_http_status_codes14.StatusCodes.BAD_REQUEST,
+      import_http_status_codes15.StatusCodes.BAD_REQUEST,
       "Passing marks cannot exceed total marks."
     );
   }
@@ -4088,7 +4147,7 @@ var updateAssessment = async (id, companyId, payload) => {
   const effectiveEndAt = payload.endAt !== void 0 ? payload.endAt : existing.endAt;
   if (effectiveStartAt && effectiveEndAt && effectiveEndAt <= effectiveStartAt) {
     throw new appError_default(
-      import_http_status_codes14.StatusCodes.BAD_REQUEST,
+      import_http_status_codes15.StatusCodes.BAD_REQUEST,
       "The end time must be after the start time."
     );
   }
@@ -4134,7 +4193,7 @@ var publishAssessment = async (id, companyId) => {
     }
   });
   if (!assessment) {
-    throw new appError_default(import_http_status_codes14.StatusCodes.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(import_http_status_codes15.StatusCodes.NOT_FOUND, "Assessment not found.");
   }
   if (assessment.status === "PUBLISHED" || assessment.status === "ACTIVE") {
     return prisma.assessment.findUniqueOrThrow({
@@ -4146,13 +4205,14 @@ var publishAssessment = async (id, companyId) => {
   }
   if (assessment.status !== "DRAFT") {
     throw new appError_default(
-      import_http_status_codes14.StatusCodes.CONFLICT,
+      import_http_status_codes15.StatusCodes.CONFLICT,
       `Cannot publish an assessment with status ${assessment.status}.`
     );
   }
+  await assertCompanyVerified(companyId);
   if (assessment.assessmentProblems.length === 0) {
     throw new appError_default(
-      import_http_status_codes14.StatusCodes.BAD_REQUEST,
+      import_http_status_codes15.StatusCodes.BAD_REQUEST,
       "Add at least one problem before publishing."
     );
   }
@@ -4162,7 +4222,7 @@ var publishAssessment = async (id, companyId) => {
   );
   if (marksSum !== assessment.totalMarks) {
     throw new appError_default(
-      import_http_status_codes14.StatusCodes.BAD_REQUEST,
+      import_http_status_codes15.StatusCodes.BAD_REQUEST,
       `Sum of problem marks (${marksSum}) does not match totalMarks (${assessment.totalMarks}).`
     );
   }
@@ -4188,15 +4248,15 @@ var closeAssessment = async (id, companyId) => {
     ) ?? {}
   });
   if (!assessment) {
-    throw new appError_default(import_http_status_codes14.StatusCodes.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(import_http_status_codes15.StatusCodes.NOT_FOUND, "Assessment not found.");
   }
   if (assessment.status !== "PUBLISHED" && assessment.status !== "ACTIVE") {
     throw new appError_default(
-      import_http_status_codes14.StatusCodes.CONFLICT,
+      import_http_status_codes15.StatusCodes.CONFLICT,
       `Cannot close an assessment with status ${assessment.status}.`
     );
   }
-  return prisma.assessment.update({
+  const closed = await prisma.assessment.update({
     where: {
       id
     },
@@ -4205,6 +4265,14 @@ var closeAssessment = async (id, companyId) => {
     },
     select: ASSESSMENT_DETAIL_SELECT
   });
+  if (!assessment.showResultImmediately) {
+    try {
+      await notifyResultsReleased(id, assessment.title);
+    } catch (error) {
+      console.error("Failed to send result-release notifications", error);
+    }
+  }
+  return closed;
 };
 var softDeleteAssessment = async (id, companyId) => {
   const assessment = await prisma.assessment.findFirst({
@@ -4217,11 +4285,11 @@ var softDeleteAssessment = async (id, companyId) => {
     ) ?? {}
   });
   if (!assessment) {
-    throw new appError_default(import_http_status_codes14.StatusCodes.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(import_http_status_codes15.StatusCodes.NOT_FOUND, "Assessment not found.");
   }
   if (assessment.status !== "DRAFT") {
     throw new appError_default(
-      import_http_status_codes14.StatusCodes.CONFLICT,
+      import_http_status_codes15.StatusCodes.CONFLICT,
       "Only DRAFT assessments can be deleted. Close a published assessment instead."
     );
   }
@@ -4255,11 +4323,11 @@ var createAssessmentVersion = async (id, companyId) => {
     }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes14.StatusCodes.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(import_http_status_codes15.StatusCodes.NOT_FOUND, "Assessment not found.");
   }
   if (existing.status === "DRAFT") {
     throw new appError_default(
-      import_http_status_codes14.StatusCodes.CONFLICT,
+      import_http_status_codes15.StatusCodes.CONFLICT,
       "Only published or closed assessments can be versioned."
     );
   }
@@ -4343,7 +4411,7 @@ var getAssessmentVersions = async (id, companyId) => {
     }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes14.StatusCodes.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(import_http_status_codes15.StatusCodes.NOT_FOUND, "Assessment not found.");
   }
   const versions = await prisma.assessment.findMany({
     where: {
@@ -4386,13 +4454,13 @@ var restoreAssessmentVersion = async (id, companyId) => {
   });
   if (!target) {
     throw new appError_default(
-      import_http_status_codes14.StatusCodes.NOT_FOUND,
+      import_http_status_codes15.StatusCodes.NOT_FOUND,
       "Assessment version not found."
     );
   }
   if (target.isLatestVersion && target.status !== "DRAFT") {
     throw new appError_default(
-      import_http_status_codes14.StatusCodes.CONFLICT,
+      import_http_status_codes15.StatusCodes.CONFLICT,
       "This is already the latest published version."
     );
   }
@@ -4413,7 +4481,7 @@ var restoreAssessmentVersion = async (id, companyId) => {
     });
     if (!latest) {
       throw new appError_default(
-        import_http_status_codes14.StatusCodes.NOT_FOUND,
+        import_http_status_codes15.StatusCodes.NOT_FOUND,
         "Latest assessment version not found."
       );
     }
@@ -4486,7 +4554,7 @@ var createAssessment2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.body
   );
-  res.status(import_http_status_codes15.StatusCodes.CREATED).json({
+  res.status(import_http_status_codes16.StatusCodes.CREATED).json({
     success: true,
     message: "Assessment created successfully.",
     data: assessment
@@ -4499,7 +4567,7 @@ var getAllAssessments2 = catchAsync(async (req, res) => {
     req.query,
     companyId
   );
-  res.status(import_http_status_codes15.StatusCodes.OK).json({
+  res.status(import_http_status_codes16.StatusCodes.OK).json({
     success: true,
     message: "Assessments retrieved successfully.",
     meta: result.meta,
@@ -4513,7 +4581,7 @@ var getAssessmentById2 = catchAsync(async (req, res) => {
     req.params.id,
     companyId
   );
-  res.status(import_http_status_codes15.StatusCodes.OK).json({
+  res.status(import_http_status_codes16.StatusCodes.OK).json({
     success: true,
     message: "Assessment retrieved successfully.",
     data: assessment
@@ -4527,7 +4595,7 @@ var updateAssessment2 = catchAsync(async (req, res) => {
     companyId,
     req.body
   );
-  res.status(import_http_status_codes15.StatusCodes.OK).json({
+  res.status(import_http_status_codes16.StatusCodes.OK).json({
     success: true,
     message: "Assessment updated successfully.",
     data: assessment
@@ -4540,7 +4608,7 @@ var publishAssessment2 = catchAsync(async (req, res) => {
     req.params.id,
     companyId
   );
-  res.status(import_http_status_codes15.StatusCodes.OK).json({
+  res.status(import_http_status_codes16.StatusCodes.OK).json({
     success: true,
     message: "Assessment published successfully.",
     data: assessment
@@ -4553,7 +4621,7 @@ var closeAssessment2 = catchAsync(async (req, res) => {
     req.params.id,
     companyId
   );
-  res.status(import_http_status_codes15.StatusCodes.OK).json({
+  res.status(import_http_status_codes16.StatusCodes.OK).json({
     success: true,
     message: "Assessment closed successfully.",
     data: assessment
@@ -4566,7 +4634,7 @@ var deleteAssessment = catchAsync(async (req, res) => {
     req.params.id,
     companyId
   );
-  res.status(import_http_status_codes15.StatusCodes.OK).json({
+  res.status(import_http_status_codes16.StatusCodes.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -4580,7 +4648,7 @@ var createAssessmentVersion2 = catchAsync(
       req.params.id,
       companyId
     );
-    res.status(import_http_status_codes15.StatusCodes.CREATED).json({
+    res.status(import_http_status_codes16.StatusCodes.CREATED).json({
       success: true,
       message: "New version created successfully.",
       data: assessment
@@ -4595,7 +4663,7 @@ var getAssessmentVersions2 = catchAsync(
       req.params.id,
       companyId
     );
-    res.status(import_http_status_codes15.StatusCodes.OK).json({
+    res.status(import_http_status_codes16.StatusCodes.OK).json({
       success: true,
       message: "Assessment versions retrieved successfully.",
       data: versions
@@ -4610,7 +4678,7 @@ var restoreAssessmentVersion2 = catchAsync(
       req.params.id,
       companyId
     );
-    res.status(import_http_status_codes15.StatusCodes.OK).json({
+    res.status(import_http_status_codes16.StatusCodes.OK).json({
       success: true,
       message: "Assessment version restored successfully. A new draft version has been created.",
       data: assessment
@@ -4812,7 +4880,7 @@ var import_express4 = require("express");
 
 // src/app/middlewares/idempotency.ts
 var import_node_crypto2 = __toESM(require("crypto"), 1);
-var import_http_status_codes16 = require("http-status-codes");
+var import_http_status_codes17 = require("http-status-codes");
 var NON_REPLAYABLE_STATUSES = /* @__PURE__ */ new Set([408, 425, 429]);
 var idempotency = () => {
   return async (req, res, next) => {
@@ -4820,21 +4888,21 @@ var idempotency = () => {
     const key = Array.isArray(keyHeader) ? keyHeader[0] : keyHeader;
     if (!key || key.trim() === "") {
       throw new appError_default(
-        import_http_status_codes16.StatusCodes.BAD_REQUEST,
+        import_http_status_codes17.StatusCodes.BAD_REQUEST,
         "Idempotency-Key header is required",
         "MISSING_IDEMPOTENCY_KEY"
       );
     }
     if (key.length > 255) {
       throw new appError_default(
-        import_http_status_codes16.StatusCodes.BAD_REQUEST,
+        import_http_status_codes17.StatusCodes.BAD_REQUEST,
         "Idempotency-Key too long",
         "INVALID_IDEMPOTENCY_KEY"
       );
     }
     if (!req.user?.id) {
       throw new appError_default(
-        import_http_status_codes16.StatusCodes.INTERNAL_SERVER_ERROR,
+        import_http_status_codes17.StatusCodes.INTERNAL_SERVER_ERROR,
         "Idempotency middleware requires auth",
         "INTERNAL_MISCONFIGURATION"
       );
@@ -4857,7 +4925,7 @@ var idempotency = () => {
           return;
         }
         throw new appError_default(
-          import_http_status_codes16.StatusCodes.CONFLICT,
+          import_http_status_codes17.StatusCodes.CONFLICT,
           "Idempotency-Key already used with a different request body",
           "IDEMPOTENCY_CONFLICT"
         );
@@ -4907,10 +4975,10 @@ var idempotency = () => {
 };
 
 // src/app/modules/attempt/attempt.controller.ts
-var import_http_status_codes18 = require("http-status-codes");
+var import_http_status_codes19 = require("http-status-codes");
 
 // src/app/modules/attempt/attempt.service.ts
-var import_http_status_codes17 = require("http-status-codes");
+var import_http_status_codes18 = require("http-status-codes");
 
 // src/app/modules/attempt/attempt.const.ts
 var ATTEMPT_PROBLEM_SELECT = {
@@ -4954,6 +5022,8 @@ var ATTEMPT_DETAIL_SELECT = {
     select: {
       id: true,
       title: true,
+      description: true,
+      instructions: true,
       companyId: true,
       durationMinutes: true,
       totalMarks: true,
@@ -4997,6 +5067,7 @@ var SUBMISSION_GRADING_SELECT = {
   attempt: {
     select: {
       id: true,
+      assessmentId: true,
       attemptNumber: true,
       candidate: { select: { id: true, name: true, email: true } }
     }
@@ -5047,6 +5118,10 @@ var SUBMISSION_GRADING_SELECT = {
   }
 };
 
+// src/app/modules/result/result.access.ts
+var RELEASED_STATUSES = ["CLOSED", "ARCHIVED"];
+var isResultReleasedToCandidate = (assessment) => assessment.showResultImmediately || RELEASED_STATUSES.includes(assessment.status);
+
 // src/app/modules/attempt/grading.util.ts
 var gradeSubmissionForProblem = async (params) => {
   const { attemptId, problemId, problemType, marks } = params;
@@ -5073,7 +5148,11 @@ var gradeSubmissionForProblem = async (params) => {
     const [mcqProblem, selectedAnswers] = await Promise.all([
       prisma.mcqProblem.findUniqueOrThrow({
         where: { problemId },
-        include: { options: { select: { id: true, isCorrect: true } } }
+        include: {
+          options: {
+            select: { id: true, isCorrect: true }
+          }
+        }
       }),
       prisma.submissionAnswer.findMany({
         where: { submissionId: submission.id },
@@ -5118,7 +5197,11 @@ var gradeSubmissionForProblem = async (params) => {
   });
   await prisma.submissionEvaluation.upsert({
     where: { submissionId: submission.id },
-    update: { maxScore: marks, status: "PENDING", isAutoEvaluated: false },
+    update: {
+      maxScore: marks,
+      status: "PENDING",
+      isAutoEvaluated: false
+    },
     create: {
       submissionId: submission.id,
       score: 0,
@@ -5133,9 +5216,18 @@ var recomputeResult = async (attemptId) => {
     where: { id: attemptId },
     include: {
       assessment: {
-        select: { id: true, totalMarks: true, passingMarks: true }
+        select: {
+          id: true,
+          title: true,
+          totalMarks: true,
+          passingMarks: true,
+          showResultImmediately: true,
+          status: true
+        }
       },
-      submissions: { include: { evaluation: true } }
+      submissions: {
+        include: { evaluation: true }
+      }
     }
   });
   const allCompleted = attempt.submissions.every(
@@ -5171,14 +5263,17 @@ var recomputeResult = async (attemptId) => {
       evaluatedAt: allCompleted ? /* @__PURE__ */ new Date() : null
     }
   });
-  if (isNewlyCompleted) {
+  if (isNewlyCompleted && isResultReleasedToCandidate(attempt.assessment)) {
     await prisma.notification.create({
       data: {
         userId: attempt.candidateId,
-        title: "Result Published",
-        message: `Your result is now available: ${totalScore}/${totalMarks} (${status}).`,
-        type: "ATTEMPT_EVALUATED",
-        metadata: { assessmentId: attempt.assessment.id, attemptId }
+        title: "Result ready",
+        message: `Your result for "${attempt.assessment.title}" is ready to view.`,
+        type: "ASSESSMENT_RESULT",
+        metadata: {
+          assessmentId: attempt.assessment.id,
+          attemptId
+        }
       }
     });
   }
@@ -5231,12 +5326,12 @@ var getAttemptById = async (id, requester) => {
     select: ATTEMPT_DETAIL_SELECT
   });
   if (!attempt) {
-    throw new appError_default(import_http_status_codes17.StatusCodes.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Attempt not found.");
   }
   const isOwner = attempt.candidateId === requester.id;
   const isOwningRecruiter = requester.companyId !== void 0 && attempt.assessment.companyId === requester.companyId;
   if (requester.role !== "ADMIN" && !isOwner && !isOwningRecruiter) {
-    throw new appError_default(import_http_status_codes17.StatusCodes.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Attempt not found.");
   }
   if (attempt.status === "IN_PROGRESS" && attempt.expiresAt < /* @__PURE__ */ new Date()) {
     await finalizeAttempt(id);
@@ -5259,24 +5354,24 @@ var startAttempt = async (candidateId, assessmentId) => {
     where: { id: assessmentId, deletedAt: null }
   });
   if (!assessment) {
-    throw new appError_default(import_http_status_codes17.StatusCodes.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Assessment not found.");
   }
   if (assessment.status !== "PUBLISHED" && assessment.status !== "ACTIVE") {
     throw new appError_default(
-      import_http_status_codes17.StatusCodes.CONFLICT,
+      import_http_status_codes18.StatusCodes.CONFLICT,
       "This assessment is not currently open for attempts."
     );
   }
   const now = /* @__PURE__ */ new Date();
   if (assessment.startAt && now < assessment.startAt) {
     throw new appError_default(
-      import_http_status_codes17.StatusCodes.CONFLICT,
+      import_http_status_codes18.StatusCodes.CONFLICT,
       "This assessment has not started yet."
     );
   }
   if (assessment.endAt && now > assessment.endAt) {
     throw new appError_default(
-      import_http_status_codes17.StatusCodes.CONFLICT,
+      import_http_status_codes18.StatusCodes.CONFLICT,
       "This assessment's window has closed."
     );
   }
@@ -5289,7 +5384,7 @@ var startAttempt = async (candidateId, assessmentId) => {
   });
   if (!invitation) {
     throw new appError_default(
-      import_http_status_codes17.StatusCodes.FORBIDDEN,
+      import_http_status_codes18.StatusCodes.FORBIDDEN,
       "You need an accepted invitation to start this assessment."
     );
   }
@@ -5310,7 +5405,7 @@ var startAttempt = async (candidateId, assessmentId) => {
   });
   if (attemptCount >= assessment.maxAttempts) {
     throw new appError_default(
-      import_http_status_codes17.StatusCodes.CONFLICT,
+      import_http_status_codes18.StatusCodes.CONFLICT,
       `You have used all ${assessment.maxAttempts} allowed attempt(s) for this assessment.`
     );
   }
@@ -5344,25 +5439,25 @@ var saveSubmission = async (attemptId, candidateId, problemId, payload) => {
     }
   });
   if (!attempt) {
-    throw new appError_default(import_http_status_codes17.StatusCodes.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Attempt not found.");
   }
   if (attempt.status === "IN_PROGRESS" && attempt.expiresAt < /* @__PURE__ */ new Date()) {
     await finalizeAttempt(attemptId);
     throw new appError_default(
-      import_http_status_codes17.StatusCodes.GONE,
+      import_http_status_codes18.StatusCodes.GONE,
       "Time is up \u2014 this attempt has been auto-submitted."
     );
   }
   if (attempt.status !== "IN_PROGRESS") {
     throw new appError_default(
-      import_http_status_codes17.StatusCodes.CONFLICT,
+      import_http_status_codes18.StatusCodes.CONFLICT,
       `Cannot modify answers \u2014 this attempt is already ${attempt.status.toLowerCase()}.`
     );
   }
   const assessmentProblem = attempt.assessment.assessmentProblems[0];
   if (!assessmentProblem) {
     throw new appError_default(
-      import_http_status_codes17.StatusCodes.BAD_REQUEST,
+      import_http_status_codes18.StatusCodes.BAD_REQUEST,
       "This problem is not part of this assessment."
     );
   }
@@ -5372,7 +5467,7 @@ var saveSubmission = async (attemptId, candidateId, problemId, payload) => {
   if (problem.type === "MCQ") {
     if (payload.selectedOptionIds === void 0) {
       throw new appError_default(
-        import_http_status_codes17.StatusCodes.BAD_REQUEST,
+        import_http_status_codes18.StatusCodes.BAD_REQUEST,
         "selectedOptionIds is required for an MCQ problem."
       );
     }
@@ -5391,13 +5486,13 @@ var saveSubmission = async (attemptId, candidateId, problemId, payload) => {
       );
       if (hasInvalidOption) {
         throw new appError_default(
-          import_http_status_codes17.StatusCodes.BAD_REQUEST,
+          import_http_status_codes18.StatusCodes.BAD_REQUEST,
           "One or more selected options do not belong to this problem."
         );
       }
       if (mcqProblem.type === "SINGLE_CHOICE" && selectedOptionIds.length > 1) {
         throw new appError_default(
-          import_http_status_codes17.StatusCodes.BAD_REQUEST,
+          import_http_status_codes18.StatusCodes.BAD_REQUEST,
           "This is a single-choice question \u2014 select only one option."
         );
       }
@@ -5405,7 +5500,7 @@ var saveSubmission = async (attemptId, candidateId, problemId, payload) => {
   } else if (problem.type === "CODING") {
     if (payload.code === void 0) {
       throw new appError_default(
-        import_http_status_codes17.StatusCodes.BAD_REQUEST,
+        import_http_status_codes18.StatusCodes.BAD_REQUEST,
         "code is required for a CODING problem."
       );
     }
@@ -5413,7 +5508,7 @@ var saveSubmission = async (attemptId, candidateId, problemId, payload) => {
   } else {
     if (payload.answerText === void 0) {
       throw new appError_default(
-        import_http_status_codes17.StatusCodes.BAD_REQUEST,
+        import_http_status_codes18.StatusCodes.BAD_REQUEST,
         "answerText is required for a WRITTEN problem."
       );
     }
@@ -5465,11 +5560,11 @@ var submitAttempt = async (attemptId, candidateId) => {
     where: { id: attemptId, candidateId }
   });
   if (!attempt) {
-    throw new appError_default(import_http_status_codes17.StatusCodes.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Attempt not found.");
   }
   if (attempt.status !== "IN_PROGRESS") {
     throw new appError_default(
-      import_http_status_codes17.StatusCodes.CONFLICT,
+      import_http_status_codes18.StatusCodes.CONFLICT,
       `This attempt is already ${attempt.status.toLowerCase()}.`
     );
   }
@@ -5481,7 +5576,7 @@ var recordProctoringEvent = async (attemptId, candidateId, payload) => {
     where: { id: attemptId, candidateId }
   });
   if (!attempt) {
-    throw new appError_default(import_http_status_codes17.StatusCodes.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Attempt not found.");
   }
   if (attempt.status !== "IN_PROGRESS") {
     return { recorded: false };
@@ -5525,12 +5620,12 @@ var getProctoringEvents = async (attemptId, requester) => {
     }
   });
   if (!attempt) {
-    throw new appError_default(import_http_status_codes17.StatusCodes.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Attempt not found.");
   }
   const isOwner = attempt.candidateId === requester.id;
   const isOwningRecruiter = requester.companyId !== void 0 && attempt.assessment.companyId === requester.companyId;
   if (requester.role !== "ADMIN" && !isOwner && !isOwningRecruiter) {
-    throw new appError_default(import_http_status_codes17.StatusCodes.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Attempt not found.");
   }
   return prisma.proctoringEvent.findMany({
     where: { attemptId },
@@ -5547,18 +5642,18 @@ var getProctoringEventById = async (attemptId, eventId, requester) => {
     }
   });
   if (!attempt) {
-    throw new appError_default(import_http_status_codes17.StatusCodes.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Attempt not found.");
   }
   const isOwner = attempt.candidateId === requester.id;
   const isOwningRecruiter = requester.companyId !== void 0 && attempt.assessment.companyId === requester.companyId;
   if (requester.role !== "ADMIN" && !isOwner && !isOwningRecruiter) {
-    throw new appError_default(import_http_status_codes17.StatusCodes.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Attempt not found.");
   }
   const event = await prisma.proctoringEvent.findFirst({
     where: { id: eventId, attemptId }
   });
   if (!event) {
-    throw new appError_default(import_http_status_codes17.StatusCodes.NOT_FOUND, "Proctoring event not found.");
+    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Proctoring event not found.");
   }
   return event;
 };
@@ -5580,7 +5675,7 @@ var startAttempt2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.body.assessmentId
   );
-  res.status(import_http_status_codes18.StatusCodes.CREATED).json({
+  res.status(import_http_status_codes19.StatusCodes.CREATED).json({
     success: true,
     message: "Attempt started successfully.",
     data: attempt
@@ -5589,7 +5684,7 @@ var startAttempt2 = catchAsync(async (req, res) => {
 var getMyAttempts2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const attempts = await attemptService.getMyAttempts(currentUser.id);
-  res.status(import_http_status_codes18.StatusCodes.OK).json({
+  res.status(import_http_status_codes19.StatusCodes.OK).json({
     success: true,
     message: "Attempts retrieved successfully.",
     data: attempts
@@ -5603,7 +5698,7 @@ var getAttemptById2 = catchAsync(async (req, res) => {
     role: currentUser.role,
     ...companyId !== void 0 && { companyId }
   });
-  res.status(import_http_status_codes18.StatusCodes.OK).json({
+  res.status(import_http_status_codes19.StatusCodes.OK).json({
     success: true,
     message: "Attempt retrieved successfully.",
     data: attempt
@@ -5617,7 +5712,7 @@ var saveSubmission2 = catchAsync(async (req, res) => {
     req.params.problemId,
     req.body
   );
-  res.status(import_http_status_codes18.StatusCodes.OK).json({
+  res.status(import_http_status_codes19.StatusCodes.OK).json({
     success: true,
     message: "Answer saved successfully.",
     data: submission
@@ -5629,7 +5724,7 @@ var submitAttempt2 = catchAsync(async (req, res) => {
     req.params.id,
     currentUser.id
   );
-  res.status(import_http_status_codes18.StatusCodes.OK).json({
+  res.status(import_http_status_codes19.StatusCodes.OK).json({
     success: true,
     message: "Attempt submitted successfully.",
     data: attempt
@@ -5643,7 +5738,7 @@ var recordProctoringEvent2 = catchAsync(
       currentUser.id,
       req.body
     );
-    res.status(import_http_status_codes18.StatusCodes.OK).json({
+    res.status(import_http_status_codes19.StatusCodes.OK).json({
       success: true,
       message: result.recorded ? "Event recorded." : "Attempt is no longer active; event ignored.",
       data: result
@@ -5661,7 +5756,7 @@ var getProctoringEvents2 = catchAsync(async (req, res) => {
       ...companyId !== void 0 && { companyId }
     }
   );
-  res.status(import_http_status_codes18.StatusCodes.OK).json({
+  res.status(import_http_status_codes19.StatusCodes.OK).json({
     success: true,
     message: "Proctoring events retrieved successfully.",
     data: events
@@ -5680,7 +5775,7 @@ var getProctoringEventById2 = catchAsync(
         ...companyId !== void 0 && { companyId }
       }
     );
-    res.status(import_http_status_codes18.StatusCodes.OK).json({
+    res.status(import_http_status_codes19.StatusCodes.OK).json({
       success: true,
       message: "Proctoring event retrieved successfully.",
       data: event
@@ -5795,7 +5890,7 @@ var import_express5 = require("express");
 
 // src/app/modules/auth/auth.controller.ts
 var import_node2 = require("better-auth/node");
-var import_http_status_codes20 = require("http-status-codes");
+var import_http_status_codes21 = require("http-status-codes");
 
 // src/app/utils/authCookies.ts
 var applyAuthCookies = (headers, res) => {
@@ -5810,7 +5905,7 @@ var applyAuthCookies = (headers, res) => {
 };
 
 // src/app/modules/auth/auth.service.ts
-var import_http_status_codes19 = require("http-status-codes");
+var import_http_status_codes20 = require("http-status-codes");
 
 // src/app/modules/auth/auth.const.ts
 var AUTH_FALLBACK_MESSAGES = {
@@ -5942,7 +6037,7 @@ var register2 = catchAsync(async (req, res) => {
     (0, import_node2.fromNodeHeaders)(req.headers)
   );
   applyAuthCookies(headers, res);
-  res.status(import_http_status_codes20.StatusCodes.CREATED).json({
+  res.status(import_http_status_codes21.StatusCodes.CREATED).json({
     success: true,
     message: "Registered successfully. Please check your email for the verification code.",
     data
@@ -5954,7 +6049,7 @@ var login2 = catchAsync(async (req, res) => {
     (0, import_node2.fromNodeHeaders)(req.headers)
   );
   applyAuthCookies(headers, res);
-  res.status(import_http_status_codes20.StatusCodes.OK).json({
+  res.status(import_http_status_codes21.StatusCodes.OK).json({
     success: true,
     message: "Logged in successfully.",
     data
@@ -5965,7 +6060,7 @@ var logout2 = catchAsync(async (req, res) => {
     (0, import_node2.fromNodeHeaders)(req.headers)
   );
   applyAuthCookies(headers, res);
-  res.status(import_http_status_codes20.StatusCodes.OK).json({
+  res.status(import_http_status_codes21.StatusCodes.OK).json({
     success: true,
     message: "Logged out successfully.",
     data
@@ -5976,7 +6071,7 @@ var refreshToken2 = catchAsync(async (req, res) => {
     (0, import_node2.fromNodeHeaders)(req.headers)
   );
   applyAuthCookies(headers, res);
-  res.status(import_http_status_codes20.StatusCodes.OK).json({
+  res.status(import_http_status_codes21.StatusCodes.OK).json({
     success: true,
     message: "Session refreshed successfully.",
     data
@@ -5984,7 +6079,7 @@ var refreshToken2 = catchAsync(async (req, res) => {
 });
 var sendEmailOtp2 = catchAsync(async (req, res) => {
   const { data } = await authService.sendEmailOtp(req.body);
-  res.status(import_http_status_codes20.StatusCodes.OK).json({
+  res.status(import_http_status_codes21.StatusCodes.OK).json({
     success: true,
     message: "Verification code sent.",
     data
@@ -5992,7 +6087,7 @@ var sendEmailOtp2 = catchAsync(async (req, res) => {
 });
 var verifyEmailOtp2 = catchAsync(async (req, res) => {
   const { data } = await authService.verifyEmailOtp(req.body);
-  res.status(import_http_status_codes20.StatusCodes.OK).json({
+  res.status(import_http_status_codes21.StatusCodes.OK).json({
     success: true,
     message: "Email verified successfully.",
     data
@@ -6000,7 +6095,7 @@ var verifyEmailOtp2 = catchAsync(async (req, res) => {
 });
 var resetPasswordWithOtp2 = catchAsync(async (req, res) => {
   const { data } = await authService.resetPasswordWithOtp(req.body);
-  res.status(import_http_status_codes20.StatusCodes.OK).json({
+  res.status(import_http_status_codes21.StatusCodes.OK).json({
     success: true,
     message: "Password reset successfully. You can now log in.",
     data
@@ -6012,14 +6107,14 @@ var changePassword2 = catchAsync(async (req, res) => {
     (0, import_node2.fromNodeHeaders)(req.headers)
   );
   applyAuthCookies(headers, res);
-  res.status(import_http_status_codes20.StatusCodes.OK).json({
+  res.status(import_http_status_codes21.StatusCodes.OK).json({
     success: true,
     message: "Password changed successfully.",
     data
   });
 });
 var getMe = catchAsync(async (req, res) => {
-  res.status(import_http_status_codes20.StatusCodes.OK).json({
+  res.status(import_http_status_codes21.StatusCodes.OK).json({
     success: true,
     message: "Current user retrieved successfully.",
     data: req.user
@@ -6128,7 +6223,7 @@ var authRoutes = router5;
 var import_express6 = require("express");
 
 // src/app/middlewares/upload.ts
-var import_http_status_codes21 = require("http-status-codes");
+var import_http_status_codes22 = require("http-status-codes");
 var import_multer2 = __toESM(require("multer"), 1);
 var storage = import_multer2.default.memoryStorage();
 var IMAGE_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
@@ -6146,7 +6241,7 @@ var makeUploader = (allowedMimeTypes, maxSizeBytes, label) => (0, import_multer2
     if (!allowedMimeTypes.includes(file.mimetype)) {
       cb(
         new appError_default(
-          import_http_status_codes21.StatusCodes.BAD_REQUEST,
+          import_http_status_codes22.StatusCodes.BAD_REQUEST,
           `Only ${label} files are allowed.`
         )
       );
@@ -6167,7 +6262,7 @@ var documentUpload = makeUploader(
 );
 
 // src/app/middlewares/validateRequestWithFile.ts
-var import_http_status_codes22 = require("http-status-codes");
+var import_http_status_codes23 = require("http-status-codes");
 var validateRequestWithFile = (schema) => {
   return async (req, res, next) => {
     if (typeof req.body?.data === "string") {
@@ -6176,7 +6271,7 @@ var validateRequestWithFile = (schema) => {
       } catch {
         return next(
           new appError_default(
-            import_http_status_codes22.StatusCodes.BAD_REQUEST,
+            import_http_status_codes23.StatusCodes.BAD_REQUEST,
             "Invalid JSON in 'data' field."
           )
         );
@@ -6187,13 +6282,13 @@ var validateRequestWithFile = (schema) => {
 };
 
 // src/app/modules/candidate/candidate.controller.ts
-var import_http_status_codes25 = require("http-status-codes");
+var import_http_status_codes26 = require("http-status-codes");
 
 // src/app/modules/candidate/candidate.service.ts
-var import_http_status_codes24 = require("http-status-codes");
+var import_http_status_codes25 = require("http-status-codes");
 
 // src/app/utils/fileUploader.ts
-var import_http_status_codes23 = require("http-status-codes");
+var import_http_status_codes24 = require("http-status-codes");
 
 // src/lib/cloudinary.ts
 var import_cloudinary = require("cloudinary");
@@ -6220,7 +6315,7 @@ var getCloudinary = () => {
 var uploadFileToCloudinary = async (buffer, fileName, folder = "uploads") => {
   if (!buffer || !fileName) {
     throw new appError_default(
-      import_http_status_codes23.StatusCodes.BAD_REQUEST,
+      import_http_status_codes24.StatusCodes.BAD_REQUEST,
       "File buffer or file name is missing."
     );
   }
@@ -6234,7 +6329,7 @@ var uploadFileToCloudinary = async (buffer, fileName, folder = "uploads") => {
         if (error || !result) {
           return reject(
             new appError_default(
-              import_http_status_codes23.StatusCodes.INTERNAL_SERVER_ERROR,
+              import_http_status_codes24.StatusCodes.INTERNAL_SERVER_ERROR,
               "Cloudinary upload failed."
             )
           );
@@ -6299,7 +6394,7 @@ var upsertMyProfile = async (userId, payload, file) => {
     where: { id: userId, deletedAt: null }
   });
   if (!user) {
-    throw new appError_default(import_http_status_codes24.StatusCodes.NOT_FOUND, "User not found.");
+    throw new appError_default(import_http_status_codes25.StatusCodes.NOT_FOUND, "User not found.");
   }
   let resumeUrl;
   if (file) {
@@ -6330,7 +6425,7 @@ var getMyProfile = async (userId) => {
     select: CANDIDATE_OWN_SELECT
   });
   if (!profile) {
-    throw new appError_default(import_http_status_codes24.StatusCodes.NOT_FOUND, "Candidate profile not found.");
+    throw new appError_default(import_http_status_codes25.StatusCodes.NOT_FOUND, "Candidate profile not found.");
   }
   return profile;
 };
@@ -6340,7 +6435,7 @@ var getCandidateProfileById = async (id, requesterRole) => {
     select: CANDIDATE_DETAIL_SELECT
   });
   if (!profile) {
-    throw new appError_default(import_http_status_codes24.StatusCodes.NOT_FOUND, "Candidate profile not found.");
+    throw new appError_default(import_http_status_codes25.StatusCodes.NOT_FOUND, "Candidate profile not found.");
   }
   return profile;
 };
@@ -6362,7 +6457,7 @@ var upsertMyProfile2 = catchAsync(async (req, res) => {
     req.body,
     req.file
   );
-  res.status(import_http_status_codes25.StatusCodes.OK).json({
+  res.status(import_http_status_codes26.StatusCodes.OK).json({
     success: true,
     message: "Profile saved successfully.",
     data: profile
@@ -6371,7 +6466,7 @@ var upsertMyProfile2 = catchAsync(async (req, res) => {
 var getMyProfile2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const profile = await candidateService.getMyProfile(currentUser.id);
-  res.status(import_http_status_codes25.StatusCodes.OK).json({
+  res.status(import_http_status_codes26.StatusCodes.OK).json({
     success: true,
     message: "Profile retrieved successfully.",
     data: profile
@@ -6384,7 +6479,7 @@ var getCandidateProfileById2 = catchAsync(
       req.params.id,
       currentUser.role
     );
-    res.status(import_http_status_codes25.StatusCodes.OK).json({
+    res.status(import_http_status_codes26.StatusCodes.OK).json({
       success: true,
       message: "Candidate profile retrieved successfully.",
       data: profile
@@ -6397,7 +6492,7 @@ var getAllCandidates2 = catchAsync(async (req, res) => {
     req.query,
     currentUser.role
   );
-  res.status(import_http_status_codes25.StatusCodes.OK).json({
+  res.status(import_http_status_codes26.StatusCodes.OK).json({
     success: true,
     message: "Candidates retrieved successfully.",
     meta: result.meta,
@@ -6544,10 +6639,10 @@ var candidateRoutes = router6;
 var import_express7 = require("express");
 
 // src/app/modules/company/company.controller.ts
-var import_http_status_codes27 = require("http-status-codes");
+var import_http_status_codes28 = require("http-status-codes");
 
 // src/app/modules/company/company.service.ts
-var import_http_status_codes26 = require("http-status-codes");
+var import_http_status_codes27 = require("http-status-codes");
 
 // src/app/modules/company/company.const.ts
 var COMPANY_DETAIL_SELECT = {
@@ -6589,61 +6684,158 @@ var companyQueryBuilder = new QueryBuilder(prisma.company, {
   softDelete: true,
   defaultSortField: "createdAt"
 });
+var isUniqueConstraintError = (error) => typeof error === "object" && error !== null && error.code === "P2002";
+var notifyAdminsOfPendingCompany = async (company, reminder = false) => {
+  const admins = await prisma.user.findMany({
+    where: { role: "ADMIN", status: "ACTIVE", deletedAt: null },
+    select: { id: true }
+  });
+  if (admins.length === 0) return 0;
+  await prisma.notification.createMany({
+    data: admins.map((admin) => ({
+      userId: admin.id,
+      title: reminder ? "Company verification reminder" : "New company awaiting verification",
+      message: reminder ? `${company.name} is still waiting for verification.` : `${company.name} has registered and is waiting for verification.`,
+      type: "SYSTEM",
+      metadata: { companyId: company.id, kind: "company_pending" }
+    }))
+  });
+  return admins.length;
+};
+var notifyAdminsOfNewCompany = async (company) => {
+  try {
+    await notifyAdminsOfPendingCompany(company);
+  } catch {
+  }
+};
+var notifyOwnerOfVerification = async (company) => {
+  try {
+    await prisma.notification.create({
+      data: {
+        userId: company.ownerId,
+        title: "Your company is verified",
+        message: `${company.name} has been verified. You can now publish assessments and invite candidates.`,
+        type: "SYSTEM",
+        metadata: { companyId: company.id, kind: "company_verified" }
+      }
+    });
+  } catch {
+  }
+};
 var registerCompany = async (userId, payload) => {
+  const user = await prisma.user.findFirst({
+    where: { id: userId, deletedAt: null },
+    select: { role: true }
+  });
+  if (!user) {
+    throw new appError_default(import_http_status_codes27.StatusCodes.NOT_FOUND, "User not found.");
+  }
+  if (user.role === "ADMIN") {
+    throw new appError_default(
+      import_http_status_codes27.StatusCodes.FORBIDDEN,
+      "Admin accounts can't register a company."
+    );
+  }
   const existing = await prisma.company.findUnique({
     where: { ownerId: userId }
   });
   if (existing && !existing.deletedAt) {
     throw new appError_default(
-      import_http_status_codes26.StatusCodes.CONFLICT,
+      import_http_status_codes27.StatusCodes.CONFLICT,
       "You already have a company registered."
     );
   }
-  const company = await prisma.$transaction(async (tx) => {
-    let record;
-    if (existing) {
-      record = await tx.company.update({
-        where: { id: existing.id },
-        data: {
-          name: payload.name,
-          ...payload.description !== void 0 && {
-            description: payload.description
+  let company;
+  try {
+    company = await prisma.$transaction(async (tx) => {
+      let record;
+      if (existing) {
+        const slug = await generateUniqueSlug(
+          payload.name,
+          (candidate) => tx.company.findUnique({ where: { slug: candidate } }).then((found) => found !== null && found.id !== existing.id)
+        );
+        record = await tx.company.update({
+          where: { id: existing.id },
+          data: {
+            name: payload.name,
+            slug,
+            description: payload.description ?? null,
+            website: payload.website ?? null,
+            industry: payload.industry ?? null,
+            logo: null,
+            isVerified: false,
+            deletedAt: null
           },
-          ...payload.website !== void 0 && { website: payload.website },
-          ...payload.industry !== void 0 && { industry: payload.industry },
-          isVerified: false,
-          deletedAt: null
-        },
-        select: COMPANY_DETAIL_SELECT
-      });
-    } else {
-      const slug = await generateUniqueSlug(
-        payload.name,
-        (candidate) => tx.company.findUnique({ where: { slug: candidate } }).then(Boolean)
-      );
-      record = await tx.company.create({
-        data: {
-          name: payload.name,
-          slug,
-          ...payload.description !== void 0 && {
-            description: payload.description
+          select: COMPANY_DETAIL_SELECT
+        });
+        await tx.subscription.upsert({
+          where: { companyId: record.id },
+          update: {},
+          create: { companyId: record.id, plan: "FREE", status: "ACTIVE" }
+        });
+      } else {
+        const slug = await generateUniqueSlug(
+          payload.name,
+          (candidate) => tx.company.findUnique({ where: { slug: candidate } }).then(Boolean)
+        );
+        record = await tx.company.create({
+          data: {
+            name: payload.name,
+            slug,
+            ...payload.description !== void 0 && {
+              description: payload.description
+            },
+            ...payload.website !== void 0 && { website: payload.website },
+            ...payload.industry !== void 0 && {
+              industry: payload.industry
+            },
+            ownerId: userId
           },
-          ...payload.website !== void 0 && { website: payload.website },
-          ...payload.industry !== void 0 && { industry: payload.industry },
-          ownerId: userId
-        },
-        select: COMPANY_DETAIL_SELECT
+          select: COMPANY_DETAIL_SELECT
+        });
+        await tx.subscription.create({
+          data: { companyId: record.id, plan: "FREE", status: "ACTIVE" }
+        });
+      }
+      await tx.auditLog.create({
+        data: {
+          userId,
+          action: "CREATE",
+          entity: "Company",
+          entityId: record.id,
+          newValue: { name: record.name, slug: record.slug },
+          metadata: { reactivated: Boolean(existing) }
+        }
       });
-      await tx.subscription.create({
-        data: { companyId: record.id, plan: "FREE", status: "ACTIVE" }
-      });
-    }
-    await tx.user.update({
-      where: { id: userId },
-      data: { role: "RECRUITER" }
+      if (user.role === "CANDIDATE") {
+        await tx.user.update({
+          where: { id: userId },
+          data: { role: "RECRUITER" }
+        });
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: "ROLE_CHANGE",
+            entity: "User",
+            entityId: userId,
+            oldValue: { role: "CANDIDATE" },
+            newValue: { role: "RECRUITER" },
+            metadata: { reason: "company_registered" }
+          }
+        });
+      }
+      return record;
     });
-    return record;
-  });
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      throw new appError_default(
+        import_http_status_codes27.StatusCodes.CONFLICT,
+        "A company with these details already exists. Please try again."
+      );
+    }
+    throw error;
+  }
+  await notifyAdminsOfNewCompany(company);
   return company;
 };
 var getAllCompanies = async (query, requesterRole) => {
@@ -6656,11 +6848,11 @@ var getCompanyById = async (id, requesterId, requesterRole) => {
     select: COMPANY_DETAIL_SELECT
   });
   if (!company) {
-    throw new appError_default(import_http_status_codes26.StatusCodes.NOT_FOUND, "Company not found.");
+    throw new appError_default(import_http_status_codes27.StatusCodes.NOT_FOUND, "Company not found.");
   }
   const canSeeUnverified = requesterRole === "ADMIN" || company.ownerId === requesterId;
   if (!company.isVerified && !canSeeUnverified) {
-    throw new appError_default(import_http_status_codes26.StatusCodes.NOT_FOUND, "Company not found.");
+    throw new appError_default(import_http_status_codes27.StatusCodes.NOT_FOUND, "Company not found.");
   }
   return company;
 };
@@ -6671,7 +6863,7 @@ var getMyCompany = async (userId) => {
   });
   if (!company) {
     throw new appError_default(
-      import_http_status_codes26.StatusCodes.NOT_FOUND,
+      import_http_status_codes27.StatusCodes.NOT_FOUND,
       "You don't have a registered company yet."
     );
   }
@@ -6683,17 +6875,22 @@ var updateMyCompany = async (userId, payload, file) => {
   });
   if (!existing) {
     throw new appError_default(
-      import_http_status_codes26.StatusCodes.NOT_FOUND,
+      import_http_status_codes27.StatusCodes.NOT_FOUND,
       "You don't have a registered company yet."
     );
   }
-  const updateData = {
-    ...payload.description !== void 0 && {
-      description: payload.description
-    },
-    ...payload.website !== void 0 && { website: payload.website },
-    ...payload.industry !== void 0 && { industry: payload.industry }
-  };
+  const updateData = {};
+  const oldValue = {};
+  const newValue = {};
+  const editableFields = ["description", "website", "industry"];
+  for (const field of editableFields) {
+    const next = payload[field];
+    if (next !== void 0 && next !== existing[field]) {
+      updateData[field] = next;
+      oldValue[field] = existing[field];
+      newValue[field] = next;
+    }
+  }
   if (file) {
     const uploaded = await uploadFileToCloudinary(
       file.buffer,
@@ -6701,22 +6898,87 @@ var updateMyCompany = async (userId, payload, file) => {
       "company-logos"
     );
     updateData.logo = uploaded.secure_url;
+    oldValue.logo = existing.logo;
+    newValue.logo = uploaded.secure_url;
   }
-  return prisma.company.update({
-    where: { id: existing.id },
-    data: updateData,
-    select: COMPANY_DETAIL_SELECT
+  if (Object.keys(updateData).length === 0) {
+    return prisma.company.findUniqueOrThrow({
+      where: { id: existing.id },
+      select: COMPANY_DETAIL_SELECT
+    });
+  }
+  const [updated] = await prisma.$transaction([
+    prisma.company.update({
+      where: { id: existing.id },
+      data: updateData,
+      select: COMPANY_DETAIL_SELECT
+    }),
+    prisma.auditLog.create({
+      data: {
+        userId,
+        action: "UPDATE",
+        entity: "Company",
+        entityId: existing.id,
+        oldValue,
+        newValue
+      }
+    })
+  ]);
+  return updated;
+};
+var VERIFICATION_REMINDER_COOLDOWN_MS = 24 * 60 * 60 * 1e3;
+var requestVerification = async (userId) => {
+  const company = await prisma.company.findFirst({
+    where: { ownerId: userId, deletedAt: null },
+    select: { id: true, name: true, isVerified: true }
   });
+  if (!company) {
+    throw new appError_default(
+      import_http_status_codes27.StatusCodes.NOT_FOUND,
+      "You don't have a registered company yet."
+    );
+  }
+  if (company.isVerified) {
+    throw new appError_default(
+      import_http_status_codes27.StatusCodes.CONFLICT,
+      "Your company is already verified."
+    );
+  }
+  const recentlyNotified = await prisma.notification.findFirst({
+    where: {
+      type: "SYSTEM",
+      createdAt: {
+        gt: new Date(Date.now() - VERIFICATION_REMINDER_COOLDOWN_MS)
+      },
+      user: { role: "ADMIN" },
+      metadata: { path: ["companyId"], equals: company.id }
+    },
+    select: { id: true }
+  });
+  if (recentlyNotified) {
+    throw new appError_default(
+      import_http_status_codes27.StatusCodes.TOO_MANY_REQUESTS,
+      "Admins were already notified in the last 24 hours. Please try again later."
+    );
+  }
+  const notified = await notifyAdminsOfPendingCompany(company, true);
+  if (notified === 0) {
+    throw new appError_default(
+      import_http_status_codes27.StatusCodes.SERVICE_UNAVAILABLE,
+      "No administrator is available to review your company right now."
+    );
+  }
+  return { notified };
 };
 var verifyCompany = async (id, actorId) => {
   const company = await prisma.company.findFirst({
     where: { id, deletedAt: null }
   });
   if (!company) {
-    throw new appError_default(import_http_status_codes26.StatusCodes.NOT_FOUND, "Company not found.");
+    throw new appError_default(import_http_status_codes27.StatusCodes.NOT_FOUND, "Company not found.");
   }
   if (company.isVerified) {
-    throw new appError_default(import_http_status_codes26.StatusCodes.CONFLICT, "Company is already verified.");
+    throw new appError_default(import_http_status_codes27.StatusCodes.CONFLICT, "Company is already verified.");
   }
   const [updated] = await prisma.$transaction([
     prisma.company.update({
@@ -6735,6 +6997,7 @@ var verifyCompany = async (id, actorId) => {
       }
     })
   ]);
+  await notifyOwnerOfVerification(updated);
   return updated;
 };
 var softDeleteCompany = async (id, actorId, actorRole) => {
@@ -6742,25 +7005,66 @@ var softDeleteCompany = async (id, actorId, actorRole) => {
     where: { id, deletedAt: null }
   });
   if (!company) {
-    throw new appError_default(import_http_status_codes26.StatusCodes.NOT_FOUND, "Company not found.");
+    throw new appError_default(import_http_status_codes27.StatusCodes.NOT_FOUND, "Company not found.");
   }
   const isOwner = company.ownerId === actorId;
   if (!isOwner && actorRole !== "ADMIN") {
     throw new appError_default(
-      import_http_status_codes26.StatusCodes.FORBIDDEN,
+      import_http_status_codes27.StatusCodes.FORBIDDEN,
       "You don't have permission to delete this company."
     );
   }
-  await prisma.$transaction([
-    prisma.company.update({
+  await prisma.$transaction(async (tx) => {
+    await tx.company.update({
       where: { id },
       data: { deletedAt: /* @__PURE__ */ new Date() }
-    }),
-    prisma.user.update({
-      where: { id: company.ownerId },
+    });
+    const closedAssessments = await tx.assessment.updateMany({
+      where: {
+        companyId: id,
+        deletedAt: null,
+        status: { in: ["PUBLISHED", "ACTIVE"] }
+      },
+      data: { status: "CLOSED" }
+    });
+    const cancelledInvitations = await tx.assessmentInvitation.deleteMany({
+      where: {
+        status: "PENDING",
+        assessment: { companyId: id }
+      }
+    });
+    await tx.auditLog.create({
+      data: {
+        userId: actorId,
+        action: "DELETE",
+        entity: "Company",
+        entityId: id,
+        oldValue: { name: company.name, isVerified: company.isVerified },
+        metadata: {
+          deletedByOwner: isOwner,
+          closedAssessments: closedAssessments.count,
+          cancelledInvitations: cancelledInvitations.count
+        }
+      }
+    });
+    const demoted = await tx.user.updateMany({
+      where: { id: company.ownerId, role: "RECRUITER" },
       data: { role: "CANDIDATE" }
-    })
-  ]);
+    });
+    if (demoted.count > 0) {
+      await tx.auditLog.create({
+        data: {
+          userId: actorId,
+          action: "ROLE_CHANGE",
+          entity: "User",
+          entityId: company.ownerId,
+          oldValue: { role: "RECRUITER" },
+          newValue: { role: "CANDIDATE" },
+          metadata: { reason: "company_deleted" }
+        }
+      });
+    }
+  });
   return { message: "Company deleted successfully." };
 };
 var getMySubscription = async (userId) => {
@@ -6770,7 +7074,7 @@ var getMySubscription = async (userId) => {
   });
   if (!company) {
     throw new appError_default(
-      import_http_status_codes26.StatusCodes.NOT_FOUND,
+      import_http_status_codes27.StatusCodes.NOT_FOUND,
       "You don't have a registered company yet."
     );
   }
@@ -6790,7 +7094,7 @@ var getMySubscription = async (userId) => {
 var updateMySubscription = async (userId, plan) => {
   if (plan !== "FREE") {
     throw new appError_default(
-      import_http_status_codes26.StatusCodes.BAD_REQUEST,
+      import_http_status_codes27.StatusCodes.BAD_REQUEST,
       "Paid plans can only be activated through checkout."
     );
   }
@@ -6799,7 +7103,7 @@ var updateMySubscription = async (userId, plan) => {
   });
   if (!company) {
     throw new appError_default(
-      import_http_status_codes26.StatusCodes.NOT_FOUND,
+      import_http_status_codes27.StatusCodes.NOT_FOUND,
       "You don't have a registered company yet."
     );
   }
@@ -6823,19 +7127,19 @@ var cancelMySubscription = async (userId) => {
   });
   if (!company) {
     throw new appError_default(
-      import_http_status_codes26.StatusCodes.NOT_FOUND,
+      import_http_status_codes27.StatusCodes.NOT_FOUND,
       "You don't have a registered company yet."
     );
   }
   if (!company.subscription) {
     throw new appError_default(
-      import_http_status_codes26.StatusCodes.NOT_FOUND,
+      import_http_status_codes27.StatusCodes.NOT_FOUND,
       "No active subscription to cancel."
     );
   }
   if (company.subscription.status === "CANCELLED" || company.subscription.status === "EXPIRED") {
     throw new appError_default(
-      import_http_status_codes26.StatusCodes.CONFLICT,
+      import_http_status_codes27.StatusCodes.CONFLICT,
       "Subscription is already cancelled or expired."
     );
   }
@@ -6855,6 +7159,7 @@ var companyService = {
   getCompanyById,
   getMyCompany,
   updateMyCompany,
+  requestVerification,
   verifyCompany,
   softDeleteCompany,
   getMySubscription,
@@ -6869,7 +7174,7 @@ var registerCompany2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.body
   );
-  res.status(import_http_status_codes27.StatusCodes.CREATED).json({
+  res.status(import_http_status_codes28.StatusCodes.CREATED).json({
     success: true,
     message: "Company registered successfully. Awaiting admin verification.",
     data: company
@@ -6881,7 +7186,7 @@ var getAllCompanies2 = catchAsync(async (req, res) => {
     req.query,
     requesterRole
   );
-  res.status(import_http_status_codes27.StatusCodes.OK).json({
+  res.status(import_http_status_codes28.StatusCodes.OK).json({
     success: true,
     message: "Companies retrieved successfully.",
     meta: result.meta,
@@ -6895,7 +7200,7 @@ var getCompanyById2 = catchAsync(async (req, res) => {
     requester?.id ?? "",
     requester?.role ?? "CANDIDATE"
   );
-  res.status(import_http_status_codes27.StatusCodes.OK).json({
+  res.status(import_http_status_codes28.StatusCodes.OK).json({
     success: true,
     message: "Company retrieved successfully.",
     data: company
@@ -6904,7 +7209,7 @@ var getCompanyById2 = catchAsync(async (req, res) => {
 var getMyCompany2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const company = await companyService.getMyCompany(currentUser.id);
-  res.status(import_http_status_codes27.StatusCodes.OK).json({
+  res.status(import_http_status_codes28.StatusCodes.OK).json({
     success: true,
     message: "Your company retrieved successfully.",
     data: company
@@ -6917,10 +7222,19 @@ var updateMyCompany2 = catchAsync(async (req, res) => {
     req.body,
     req.file
   );
-  res.status(import_http_status_codes27.StatusCodes.OK).json({
+  res.status(import_http_status_codes28.StatusCodes.OK).json({
     success: true,
     message: "Company updated successfully.",
     data: company
+  });
+});
+var requestVerification2 = catchAsync(async (req, res) => {
+  const currentUser = req.user;
+  const result = await companyService.requestVerification(currentUser.id);
+  res.status(import_http_status_codes28.StatusCodes.OK).json({
+    success: true,
+    message: "Admins have been notified and will review your company.",
+    data: result
   });
 });
 var verifyCompany2 = catchAsync(async (req, res) => {
@@ -6929,7 +7243,7 @@ var verifyCompany2 = catchAsync(async (req, res) => {
     req.params.id,
     currentUser.id
   );
-  res.status(import_http_status_codes27.StatusCodes.OK).json({
+  res.status(import_http_status_codes28.StatusCodes.OK).json({
     success: true,
     message: "Company verified successfully.",
     data: company
@@ -6942,7 +7256,7 @@ var deleteCompany = catchAsync(async (req, res) => {
     currentUser.id,
     currentUser.role
   );
-  res.status(import_http_status_codes27.StatusCodes.OK).json({
+  res.status(import_http_status_codes28.StatusCodes.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -6951,7 +7265,7 @@ var deleteCompany = catchAsync(async (req, res) => {
 var getMySubscription2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const subscription = await companyService.getMySubscription(currentUser.id);
-  res.status(import_http_status_codes27.StatusCodes.OK).json({
+  res.status(import_http_status_codes28.StatusCodes.OK).json({
     success: true,
     message: "Subscription retrieved successfully.",
     data: subscription
@@ -6963,7 +7277,7 @@ var updateMySubscription2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.body.plan
   );
-  res.status(import_http_status_codes27.StatusCodes.OK).json({
+  res.status(import_http_status_codes28.StatusCodes.OK).json({
     success: true,
     message: "Subscription updated successfully.",
     data: subscription
@@ -6974,7 +7288,7 @@ var cancelMySubscription2 = catchAsync(async (req, res) => {
   const subscription = await companyService.cancelMySubscription(
     currentUser.id
   );
-  res.status(import_http_status_codes27.StatusCodes.OK).json({
+  res.status(import_http_status_codes28.StatusCodes.OK).json({
     success: true,
     message: "Subscription cancelled successfully. It will remain active until the end of the current period.",
     data: subscription
@@ -6986,6 +7300,7 @@ var companyController = {
   getCompanyById: getCompanyById2,
   getMyCompany: getMyCompany2,
   updateMyCompany: updateMyCompany2,
+  requestVerification: requestVerification2,
   verifyCompany: verifyCompany2,
   deleteCompany,
   getMySubscription: getMySubscription2,
@@ -7024,8 +7339,14 @@ router7.post(
   validateRequest(companyValidation.registerCompanySchema),
   companyController.registerCompany
 );
-router7.get("/", companyController.getAllCompanies);
+router7.get("/", optionalAuth, companyController.getAllCompanies);
 router7.get("/me", requireAuth, companyController.getMyCompany);
+router7.post(
+  "/me/request-verification",
+  requireAuth,
+  requireRole("RECRUITER"),
+  companyController.requestVerification
+);
 router7.patch(
   "/me",
   requireAuth,
@@ -7034,14 +7355,6 @@ router7.patch(
   validateRequestWithFile(companyValidation.updateCompanySchema),
   companyController.updateMyCompany
 );
-router7.get("/:id", companyController.getCompanyById);
-router7.patch(
-  "/:id/verify",
-  requireAuth,
-  requireRole("ADMIN"),
-  companyController.verifyCompany
-);
-router7.delete("/:id", requireAuth, companyController.deleteCompany);
 router7.get(
   "/me/subscription",
   requireAuth,
@@ -7061,16 +7374,24 @@ router7.post(
   requireRole("RECRUITER"),
   companyController.cancelMySubscription
 );
+router7.get("/:id", optionalAuth, companyController.getCompanyById);
+router7.patch(
+  "/:id/verify",
+  requireAuth,
+  requireRole("ADMIN"),
+  companyController.verifyCompany
+);
+router7.delete("/:id", requireAuth, companyController.deleteCompany);
 var companyRoutes = router7;
 
 // src/app/modules/consent/consent.routes.ts
 var import_express8 = require("express");
 
 // src/app/modules/consent/consent.controller.ts
-var import_http_status_codes29 = require("http-status-codes");
+var import_http_status_codes30 = require("http-status-codes");
 
 // src/app/modules/consent/consent.service.ts
-var import_http_status_codes28 = require("http-status-codes");
+var import_http_status_codes29 = require("http-status-codes");
 
 // src/app/modules/consent/consent.const.ts
 var CONSENT_SELECT = {
@@ -7151,11 +7472,11 @@ var revokeConsent = async (userId, consentType) => {
     where: { userId_consentType: { userId, consentType } }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes28.StatusCodes.NOT_FOUND, "Consent not found.");
+    throw new appError_default(import_http_status_codes29.StatusCodes.NOT_FOUND, "Consent not found.");
   }
   if (!existing.granted) {
     throw new appError_default(
-      import_http_status_codes28.StatusCodes.CONFLICT,
+      import_http_status_codes29.StatusCodes.CONFLICT,
       "This consent is already revoked."
     );
   }
@@ -7175,7 +7496,7 @@ var consentService = {
 var getMyConsents2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const consents = await consentService.getMyConsents(currentUser.id);
-  res.status(import_http_status_codes29.StatusCodes.OK).json({
+  res.status(import_http_status_codes30.StatusCodes.OK).json({
     success: true,
     message: "Consents retrieved successfully.",
     data: consents
@@ -7184,7 +7505,7 @@ var getMyConsents2 = catchAsync(async (req, res) => {
 var updateConsent2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const consent = await consentService.updateConsent(currentUser.id, req.body);
-  res.status(import_http_status_codes29.StatusCodes.OK).json({
+  res.status(import_http_status_codes30.StatusCodes.OK).json({
     success: true,
     message: "Consent updated successfully.",
     data: consent
@@ -7196,7 +7517,7 @@ var revokeConsent2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.params.consentType
   );
-  res.status(import_http_status_codes29.StatusCodes.OK).json({
+  res.status(import_http_status_codes30.StatusCodes.OK).json({
     success: true,
     message: "Consent revoked successfully.",
     data: consent
@@ -7241,13 +7562,13 @@ var consentRoutes = router8;
 var import_express9 = require("express");
 
 // src/app/modules/evaluation/evaluation.controller.ts
-var import_http_status_codes31 = require("http-status-codes");
+var import_http_status_codes32 = require("http-status-codes");
 
 // src/app/modules/evaluation/evaluation.service.ts
-var import_http_status_codes30 = require("http-status-codes");
+var import_http_status_codes31 = require("http-status-codes");
 var assertCanGrade = (requesterCompanyId, submissionCompanyId, role) => {
   if (role !== "ADMIN" && requesterCompanyId !== submissionCompanyId) {
-    throw new appError_default(import_http_status_codes30.StatusCodes.NOT_FOUND, "Submission not found.");
+    throw new appError_default(import_http_status_codes31.StatusCodes.NOT_FOUND, "Submission not found.");
   }
 };
 var getSubmissionsForAttempt = async (attemptId, requester) => {
@@ -7256,7 +7577,7 @@ var getSubmissionsForAttempt = async (attemptId, requester) => {
     select: { id: true, assessment: { select: { companyId: true } } }
   });
   if (!attempt) {
-    throw new appError_default(import_http_status_codes30.StatusCodes.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(import_http_status_codes31.StatusCodes.NOT_FOUND, "Attempt not found.");
   }
   assertCanGrade(
     requester.companyId,
@@ -7275,7 +7596,7 @@ var getSubmissionById = async (id, requester) => {
     select: SUBMISSION_GRADING_SELECT
   });
   if (!submission) {
-    throw new appError_default(import_http_status_codes30.StatusCodes.NOT_FOUND, "Submission not found.");
+    throw new appError_default(import_http_status_codes31.StatusCodes.NOT_FOUND, "Submission not found.");
   }
   const attempt = await prisma.assessmentAttempt.findUniqueOrThrow({
     where: { id: submission.attemptId },
@@ -7293,7 +7614,7 @@ var getPendingEvaluations = async (assessmentId, companyId) => {
     where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId)
   });
   if (!assessment) {
-    throw new appError_default(import_http_status_codes30.StatusCodes.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(import_http_status_codes31.StatusCodes.NOT_FOUND, "Assessment not found.");
   }
   return prisma.submission.findMany({
     where: { attempt: { assessmentId }, evaluation: { status: "PENDING" } },
@@ -7321,7 +7642,7 @@ var evaluateSubmission = async (id, evaluatorId, companyId, payload) => {
     }
   });
   if (!submission) {
-    throw new appError_default(import_http_status_codes30.StatusCodes.NOT_FOUND, "Submission not found.");
+    throw new appError_default(import_http_status_codes31.StatusCodes.NOT_FOUND, "Submission not found.");
   }
   assertCanGrade(
     companyId,
@@ -7330,13 +7651,13 @@ var evaluateSubmission = async (id, evaluatorId, companyId, payload) => {
   );
   if (submission.attempt.status === "NOT_STARTED" || submission.attempt.status === "IN_PROGRESS") {
     throw new appError_default(
-      import_http_status_codes30.StatusCodes.CONFLICT,
+      import_http_status_codes31.StatusCodes.CONFLICT,
       "This attempt hasn't been submitted yet."
     );
   }
   if (submission.problem.type === "MCQ") {
     throw new appError_default(
-      import_http_status_codes30.StatusCodes.BAD_REQUEST,
+      import_http_status_codes31.StatusCodes.BAD_REQUEST,
       "MCQ submissions are graded automatically and cannot be manually re-graded."
     );
   }
@@ -7346,7 +7667,7 @@ var evaluateSubmission = async (id, evaluatorId, companyId, payload) => {
   const maxScore = assessmentProblem?.marks ?? submission.problem.defaultMarks;
   if (payload.score > maxScore) {
     throw new appError_default(
-      import_http_status_codes30.StatusCodes.BAD_REQUEST,
+      import_http_status_codes31.StatusCodes.BAD_REQUEST,
       `Score cannot exceed the maximum marks for this problem (${maxScore}).`
     );
   }
@@ -7432,7 +7753,7 @@ var getSubmissionsForAttempt2 = catchAsync(
         ...companyId !== void 0 && { companyId }
       }
     );
-    res.status(import_http_status_codes31.StatusCodes.OK).json({
+    res.status(import_http_status_codes32.StatusCodes.OK).json({
       success: true,
       message: "Submissions retrieved successfully.",
       data: submissions
@@ -7450,7 +7771,7 @@ var getSubmissionById2 = catchAsync(async (req, res) => {
       ...companyId !== void 0 && { companyId }
     }
   );
-  res.status(import_http_status_codes31.StatusCodes.OK).json({
+  res.status(import_http_status_codes32.StatusCodes.OK).json({
     success: true,
     message: "Submission retrieved successfully.",
     data: submission
@@ -7464,7 +7785,7 @@ var getPendingEvaluations2 = catchAsync(
       req.params.assessmentId,
       companyId
     );
-    res.status(import_http_status_codes31.StatusCodes.OK).json({
+    res.status(import_http_status_codes32.StatusCodes.OK).json({
       success: true,
       message: "Pending evaluations retrieved successfully.",
       data: submissions
@@ -7480,7 +7801,7 @@ var evaluateSubmission2 = catchAsync(async (req, res) => {
     companyId,
     req.body
   );
-  res.status(import_http_status_codes31.StatusCodes.OK).json({
+  res.status(import_http_status_codes32.StatusCodes.OK).json({
     success: true,
     message: "Submission evaluated successfully.",
     data: submission
@@ -7533,11 +7854,11 @@ var evaluationRoutes = router9;
 var import_express10 = require("express");
 
 // src/app/modules/invitation/invitation.controller.ts
-var import_http_status_codes33 = require("http-status-codes");
+var import_http_status_codes34 = require("http-status-codes");
 
 // src/app/modules/invitation/invitation.service.ts
 var import_node_crypto3 = require("crypto");
-var import_http_status_codes32 = require("http-status-codes");
+var import_http_status_codes33 = require("http-status-codes");
 
 // src/lib/resend.ts
 var import_resend = require("resend");
@@ -7629,15 +7950,16 @@ var invitationQueryBuilder = new QueryBuilder(
   }
 );
 var inviteCandidates = async (assessmentId, companyId, payload) => {
+  await assertCompanyVerified(companyId);
   const assessment = await prisma.assessment.findFirst({
     where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId) ?? {}
   });
   if (!assessment) {
-    throw new appError_default(import_http_status_codes32.StatusCodes.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(import_http_status_codes33.StatusCodes.NOT_FOUND, "Assessment not found.");
   }
   if (assessment.status !== "PUBLISHED" && assessment.status !== "ACTIVE") {
     throw new appError_default(
-      import_http_status_codes32.StatusCodes.CONFLICT,
+      import_http_status_codes33.StatusCodes.CONFLICT,
       "Candidates can only be invited to a published assessment."
     );
   }
@@ -7705,7 +8027,7 @@ var inviteCandidates = async (assessmentId, companyId, payload) => {
 var getInvitationsForAssessment = async (assessmentId, companyId, query) => {
   if (!companyId) {
     throw new appError_default(
-      import_http_status_codes32.StatusCodes.FORBIDDEN,
+      import_http_status_codes33.StatusCodes.FORBIDDEN,
       "Recruiter scope could not be resolved."
     );
   }
@@ -7713,7 +8035,7 @@ var getInvitationsForAssessment = async (assessmentId, companyId, query) => {
     where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId) ?? {}
   });
   if (!assessment) {
-    throw new appError_default(import_http_status_codes32.StatusCodes.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(import_http_status_codes33.StatusCodes.NOT_FOUND, "Assessment not found.");
   }
   return invitationQueryBuilder.execute(query, { assessmentId });
 };
@@ -7734,12 +8056,12 @@ var getInvitationById = async (id, requester) => {
     select: INVITATION_SELECT
   });
   if (!invitation) {
-    throw new appError_default(import_http_status_codes32.StatusCodes.NOT_FOUND, "Invitation not found.");
+    throw new appError_default(import_http_status_codes33.StatusCodes.NOT_FOUND, "Invitation not found.");
   }
   const isInvitedCandidate = invitation.candidateId === requester.id || invitation.email.toLowerCase() === requester.email.toLowerCase();
   const isOwningRecruiter = requester.companyId !== void 0 && invitation.assessment.companyId === requester.companyId;
   if (requester.role !== "ADMIN" && !isInvitedCandidate && !isOwningRecruiter) {
-    throw new appError_default(import_http_status_codes32.StatusCodes.NOT_FOUND, "Invitation not found.");
+    throw new appError_default(import_http_status_codes33.StatusCodes.NOT_FOUND, "Invitation not found.");
   }
   return invitation;
 };
@@ -7749,12 +8071,12 @@ var acceptInvitation = async (id, userId, email) => {
     include: { assessment: true }
   });
   if (!invitation) {
-    throw new appError_default(import_http_status_codes32.StatusCodes.NOT_FOUND, "Invitation not found.");
+    throw new appError_default(import_http_status_codes33.StatusCodes.NOT_FOUND, "Invitation not found.");
   }
   const belongsToUser = invitation.candidateId === userId || invitation.email.toLowerCase() === email.toLowerCase();
   if (!belongsToUser) {
     throw new appError_default(
-      import_http_status_codes32.StatusCodes.FORBIDDEN,
+      import_http_status_codes33.StatusCodes.FORBIDDEN,
       "This invitation does not belong to your account."
     );
   }
@@ -7763,17 +8085,17 @@ var acceptInvitation = async (id, userId, email) => {
       where: { id },
       data: { status: "EXPIRED" }
     });
-    throw new appError_default(import_http_status_codes32.StatusCodes.GONE, "This invitation has expired.");
+    throw new appError_default(import_http_status_codes33.StatusCodes.GONE, "This invitation has expired.");
   }
   if (invitation.status !== "PENDING") {
     throw new appError_default(
-      import_http_status_codes32.StatusCodes.CONFLICT,
+      import_http_status_codes33.StatusCodes.CONFLICT,
       `This invitation is already ${invitation.status.toLowerCase()}.`
     );
   }
   if (invitation.assessment.status !== "PUBLISHED" && invitation.assessment.status !== "ACTIVE") {
     throw new appError_default(
-      import_http_status_codes32.StatusCodes.CONFLICT,
+      import_http_status_codes33.StatusCodes.CONFLICT,
       "This assessment is no longer accepting candidates."
     );
   }
@@ -7788,18 +8110,18 @@ var declineInvitation = async (id, userId, email) => {
     where: { id }
   });
   if (!invitation) {
-    throw new appError_default(import_http_status_codes32.StatusCodes.NOT_FOUND, "Invitation not found.");
+    throw new appError_default(import_http_status_codes33.StatusCodes.NOT_FOUND, "Invitation not found.");
   }
   const belongsToUser = invitation.candidateId === userId || invitation.email.toLowerCase() === email.toLowerCase();
   if (!belongsToUser) {
     throw new appError_default(
-      import_http_status_codes32.StatusCodes.FORBIDDEN,
+      import_http_status_codes33.StatusCodes.FORBIDDEN,
       "This invitation does not belong to your account."
     );
   }
   if (invitation.status !== "PENDING") {
     throw new appError_default(
-      import_http_status_codes32.StatusCodes.CONFLICT,
+      import_http_status_codes33.StatusCodes.CONFLICT,
       `This invitation is already ${invitation.status.toLowerCase()}.`
     );
   }
@@ -7818,11 +8140,11 @@ var cancelInvitation = async (id, companyId) => {
     include: { assessment: true }
   });
   if (!invitation) {
-    throw new appError_default(import_http_status_codes32.StatusCodes.NOT_FOUND, "Invitation not found.");
+    throw new appError_default(import_http_status_codes33.StatusCodes.NOT_FOUND, "Invitation not found.");
   }
   if (invitation.status !== "PENDING") {
     throw new appError_default(
-      import_http_status_codes32.StatusCodes.CONFLICT,
+      import_http_status_codes33.StatusCodes.CONFLICT,
       "Only a pending invitation can be cancelled."
     );
   }
@@ -7848,7 +8170,7 @@ var inviteCandidates2 = catchAsync(async (req, res) => {
     companyId,
     req.body
   );
-  res.status(import_http_status_codes33.StatusCodes.CREATED).json({
+  res.status(import_http_status_codes34.StatusCodes.CREATED).json({
     success: true,
     message: `${result.invited} candidate(s) invited${result.skipped ? `, ${result.skipped} already invited` : ""}.`,
     data: result
@@ -7863,7 +8185,7 @@ var getInvitationsForAssessment2 = catchAsync(
       companyId,
       req.query
     );
-    res.status(import_http_status_codes33.StatusCodes.OK).json({
+    res.status(import_http_status_codes34.StatusCodes.OK).json({
       success: true,
       message: "Invitations retrieved successfully.",
       meta: result.meta,
@@ -7877,7 +8199,7 @@ var getMyInvitations2 = catchAsync(async (req, res) => {
     currentUser.id,
     currentUser.email
   );
-  res.status(import_http_status_codes33.StatusCodes.OK).json({
+  res.status(import_http_status_codes34.StatusCodes.OK).json({
     success: true,
     message: "Invitations retrieved successfully.",
     data: invitations
@@ -7895,7 +8217,7 @@ var getInvitationById2 = catchAsync(async (req, res) => {
       ...companyId !== void 0 && { companyId }
     }
   );
-  res.status(import_http_status_codes33.StatusCodes.OK).json({
+  res.status(import_http_status_codes34.StatusCodes.OK).json({
     success: true,
     message: "Invitation retrieved successfully.",
     data: invitation
@@ -7908,7 +8230,7 @@ var acceptInvitation2 = catchAsync(async (req, res) => {
     currentUser.id,
     currentUser.email
   );
-  res.status(import_http_status_codes33.StatusCodes.OK).json({
+  res.status(import_http_status_codes34.StatusCodes.OK).json({
     success: true,
     message: "Invitation accepted successfully.",
     data: invitation
@@ -7921,7 +8243,7 @@ var declineInvitation2 = catchAsync(async (req, res) => {
     currentUser.id,
     currentUser.email
   );
-  res.status(import_http_status_codes33.StatusCodes.OK).json({
+  res.status(import_http_status_codes34.StatusCodes.OK).json({
     success: true,
     message: "Invitation declined.",
     data: invitation
@@ -7934,7 +8256,7 @@ var cancelInvitation2 = catchAsync(async (req, res) => {
     req.params.id,
     companyId
   );
-  res.status(import_http_status_codes33.StatusCodes.OK).json({
+  res.status(import_http_status_codes34.StatusCodes.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -8004,10 +8326,10 @@ var invitationRoutes = router10;
 var import_express11 = require("express");
 
 // src/app/modules/notification/notification.controller.ts
-var import_http_status_codes35 = require("http-status-codes");
+var import_http_status_codes36 = require("http-status-codes");
 
 // src/app/modules/notification/notification.service.ts
-var import_http_status_codes34 = require("http-status-codes");
+var import_http_status_codes35 = require("http-status-codes");
 
 // src/app/modules/notification/notification.const.ts
 var NOTIFICATION_SELECT = {
@@ -8059,7 +8381,7 @@ var markAsRead = async (id, userId) => {
     where: { id, userId }
   });
   if (!notification) {
-    throw new appError_default(import_http_status_codes34.StatusCodes.NOT_FOUND, "Notification not found.");
+    throw new appError_default(import_http_status_codes35.StatusCodes.NOT_FOUND, "Notification not found.");
   }
   return prisma.notification.update({
     where: { id },
@@ -8079,7 +8401,7 @@ var deleteNotification = async (id, userId) => {
     where: { id, userId }
   });
   if (!notification) {
-    throw new appError_default(import_http_status_codes34.StatusCodes.NOT_FOUND, "Notification not found.");
+    throw new appError_default(import_http_status_codes35.StatusCodes.NOT_FOUND, "Notification not found.");
   }
   await prisma.notification.delete({ where: { id } });
   return { message: "Notification deleted successfully." };
@@ -8099,7 +8421,7 @@ var getMyNotifications2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.query
   );
-  res.status(import_http_status_codes35.StatusCodes.OK).json({
+  res.status(import_http_status_codes36.StatusCodes.OK).json({
     success: true,
     message: "Notifications retrieved successfully.",
     meta: result.meta,
@@ -8109,7 +8431,7 @@ var getMyNotifications2 = catchAsync(async (req, res) => {
 var getUnreadCount2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const result = await notificationService.getUnreadCount(currentUser.id);
-  res.status(import_http_status_codes35.StatusCodes.OK).json({
+  res.status(import_http_status_codes36.StatusCodes.OK).json({
     success: true,
     message: "Unread count retrieved successfully.",
     data: result
@@ -8121,7 +8443,7 @@ var markAsRead2 = catchAsync(async (req, res) => {
     req.params.id,
     currentUser.id
   );
-  res.status(import_http_status_codes35.StatusCodes.OK).json({
+  res.status(import_http_status_codes36.StatusCodes.OK).json({
     success: true,
     message: "Notification marked as read.",
     data: notification
@@ -8130,7 +8452,7 @@ var markAsRead2 = catchAsync(async (req, res) => {
 var markAllAsRead2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const result = await notificationService.markAllAsRead(currentUser.id);
-  res.status(import_http_status_codes35.StatusCodes.OK).json({
+  res.status(import_http_status_codes36.StatusCodes.OK).json({
     success: true,
     message: `${result.updated} notification(s) marked as read.`,
     data: result
@@ -8142,7 +8464,7 @@ var deleteNotification2 = catchAsync(async (req, res) => {
     req.params.id,
     currentUser.id
   );
-  res.status(import_http_status_codes35.StatusCodes.OK).json({
+  res.status(import_http_status_codes36.StatusCodes.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -8170,7 +8492,7 @@ var notificationRoutes = router11;
 var import_express12 = require("express");
 
 // src/app/modules/payment/payment.controller.ts
-var import_http_status_codes36 = require("http-status-codes");
+var import_http_status_codes37 = require("http-status-codes");
 var createCheckoutSession2 = catchAsync(
   async (req, res) => {
     const currentUser = req.user;
@@ -8180,7 +8502,7 @@ var createCheckoutSession2 = catchAsync(
       company.id,
       req.body
     );
-    res.status(import_http_status_codes36.StatusCodes.CREATED).json({
+    res.status(import_http_status_codes37.StatusCodes.CREATED).json({
       success: true,
       message: "Checkout session created.",
       data: result
@@ -8193,7 +8515,7 @@ var getMyPayments2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.query
   );
-  res.status(import_http_status_codes36.StatusCodes.OK).json({
+  res.status(import_http_status_codes37.StatusCodes.OK).json({
     success: true,
     message: "Payments retrieved successfully.",
     meta: result.meta,
@@ -8204,7 +8526,7 @@ var getAllPayments2 = catchAsync(async (req, res) => {
   const result = await paymentService.getAllPayments(
     req.query
   );
-  res.status(import_http_status_codes36.StatusCodes.OK).json({
+  res.status(import_http_status_codes37.StatusCodes.OK).json({
     success: true,
     message: "Payments retrieved successfully.",
     meta: result.meta,
@@ -8217,7 +8539,7 @@ var getPaymentById2 = catchAsync(async (req, res) => {
     id: currentUser.id,
     role: currentUser.role
   });
-  res.status(import_http_status_codes36.StatusCodes.OK).json({
+  res.status(import_http_status_codes37.StatusCodes.OK).json({
     success: true,
     message: "Payment retrieved successfully.",
     data: payment
@@ -8261,10 +8583,10 @@ var paymentRoutes = router12;
 var import_express13 = require("express");
 
 // src/app/modules/problem/problem.controller.ts
-var import_http_status_codes38 = require("http-status-codes");
+var import_http_status_codes39 = require("http-status-codes");
 
 // src/app/modules/problem/problem.service.ts
-var import_http_status_codes37 = require("http-status-codes");
+var import_http_status_codes38 = require("http-status-codes");
 
 // src/app/modules/problem/problem.const.ts
 var PROBLEM_DETAIL_SELECT = {
@@ -8407,7 +8729,7 @@ var getProblemById = async (id, companyId) => {
     select: PROBLEM_DETAIL_SELECT
   });
   if (!problem) {
-    throw new appError_default(import_http_status_codes37.StatusCodes.NOT_FOUND, "Problem not found.");
+    throw new appError_default(import_http_status_codes38.StatusCodes.NOT_FOUND, "Problem not found.");
   }
   return problem;
 };
@@ -8417,7 +8739,7 @@ var updateProblem = async (id, companyId, payload) => {
     where: whereClause
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes37.StatusCodes.NOT_FOUND, "Problem not found.");
+    throw new appError_default(import_http_status_codes38.StatusCodes.NOT_FOUND, "Problem not found.");
   }
   const { options, testCases, mcqType, explanation, ...topLevel } = payload;
   if (Object.keys(topLevel).length > 0) {
@@ -8462,7 +8784,7 @@ var updateProblem = async (id, companyId, payload) => {
     });
     if (hasGradedResult) {
       throw new appError_default(
-        import_http_status_codes37.StatusCodes.CONFLICT,
+        import_http_status_codes38.StatusCodes.CONFLICT,
         "This problem's test cases can't be changed after candidates have been graded against them. Create a new problem instead."
       );
     }
@@ -8479,7 +8801,7 @@ var softDeleteProblem = async (id, companyId) => {
     where: whereClause
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes37.StatusCodes.NOT_FOUND, "Problem not found.");
+    throw new appError_default(import_http_status_codes38.StatusCodes.NOT_FOUND, "Problem not found.");
   }
   const usedInLiveAssessment = await prisma.assessmentProblem.findFirst({
     where: {
@@ -8489,7 +8811,7 @@ var softDeleteProblem = async (id, companyId) => {
   });
   if (usedInLiveAssessment) {
     throw new appError_default(
-      import_http_status_codes37.StatusCodes.CONFLICT,
+      import_http_status_codes38.StatusCodes.CONFLICT,
       "This problem is part of a published assessment and can't be deleted. Remove it from the assessment first."
     );
   }
@@ -8516,7 +8838,7 @@ var createProblem2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.body
   );
-  res.status(import_http_status_codes38.StatusCodes.CREATED).json({
+  res.status(import_http_status_codes39.StatusCodes.CREATED).json({
     success: true,
     message: "Problem created successfully.",
     data: problem
@@ -8529,7 +8851,7 @@ var getAllProblems2 = catchAsync(async (req, res) => {
     req.query,
     companyId
   );
-  res.status(import_http_status_codes38.StatusCodes.OK).json({
+  res.status(import_http_status_codes39.StatusCodes.OK).json({
     success: true,
     message: "Problems retrieved successfully.",
     meta: result.meta,
@@ -8543,7 +8865,7 @@ var getProblemById2 = catchAsync(async (req, res) => {
     req.params.id,
     companyId
   );
-  res.status(import_http_status_codes38.StatusCodes.OK).json({
+  res.status(import_http_status_codes39.StatusCodes.OK).json({
     success: true,
     message: "Problem retrieved successfully.",
     data: problem
@@ -8557,7 +8879,7 @@ var updateProblem2 = catchAsync(async (req, res) => {
     companyId,
     req.body
   );
-  res.status(import_http_status_codes38.StatusCodes.OK).json({
+  res.status(import_http_status_codes39.StatusCodes.OK).json({
     success: true,
     message: "Problem updated successfully.",
     data: problem
@@ -8570,7 +8892,7 @@ var deleteProblem = catchAsync(async (req, res) => {
     req.params.id,
     companyId
   );
-  res.status(import_http_status_codes38.StatusCodes.OK).json({
+  res.status(import_http_status_codes39.StatusCodes.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -8725,10 +9047,10 @@ var problemRoutes = router13;
 var import_express14 = require("express");
 
 // src/app/modules/result/result.controller.ts
-var import_http_status_codes40 = require("http-status-codes");
+var import_http_status_codes41 = require("http-status-codes");
 
 // src/app/modules/result/result.service.ts
-var import_http_status_codes39 = require("http-status-codes");
+var import_http_status_codes40 = require("http-status-codes");
 
 // src/app/modules/result/result.const.ts
 var RESULT_LEADERBOARD_SELECT = {
@@ -8739,6 +9061,9 @@ var RESULT_LEADERBOARD_SELECT = {
   status: true,
   rank: true,
   evaluatedAt: true,
+  assessment: {
+    select: { id: true, title: true, passingMarks: true }
+  },
   attempt: {
     select: {
       id: true,
@@ -8756,7 +9081,10 @@ var getResultByAttemptId = async (attemptId, requester) => {
     whereClause.candidateId = requester.id;
   } else if (requester.role !== "ADMIN") {
     if (!requester.companyId) {
-      throw new appError_default(import_http_status_codes39.StatusCodes.FORBIDDEN, "Access denied. Missing company scope.");
+      throw new appError_default(
+        import_http_status_codes40.StatusCodes.FORBIDDEN,
+        "Access denied. Missing company scope."
+      );
     }
     whereClause.assessment = { companyId: requester.companyId };
   }
@@ -8768,11 +9096,11 @@ var getResultByAttemptId = async (attemptId, requester) => {
     }
   });
   if (!attempt) {
-    throw new appError_default(import_http_status_codes39.StatusCodes.NOT_FOUND, "Attempt result not found.");
+    throw new appError_default(import_http_status_codes40.StatusCodes.NOT_FOUND, "Attempt result not found.");
   }
-  if (requester.role === "CANDIDATE" && !attempt.assessment.showResultImmediately && attempt.assessment.status !== "CLOSED") {
+  if (requester.role === "CANDIDATE" && !isResultReleasedToCandidate(attempt.assessment)) {
     throw new appError_default(
-      import_http_status_codes39.StatusCodes.FORBIDDEN,
+      import_http_status_codes40.StatusCodes.FORBIDDEN,
       "Results for this assessment haven't been released yet."
     );
   }
@@ -8782,7 +9110,7 @@ var getResultByAttemptId = async (attemptId, requester) => {
   });
   if (!result) {
     throw new appError_default(
-      import_http_status_codes39.StatusCodes.NOT_FOUND,
+      import_http_status_codes40.StatusCodes.NOT_FOUND,
       "Result not available yet \u2014 this attempt may not be finalized."
     );
   }
@@ -8793,24 +9121,75 @@ var getResultsForAssessment = async (assessmentId, companyId) => {
     where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId)
   });
   if (!assessment) {
-    throw new appError_default(import_http_status_codes39.StatusCodes.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(import_http_status_codes40.StatusCodes.NOT_FOUND, "Assessment not found.");
   }
   return prisma.result.findMany({
     where: { assessmentId },
     select: RESULT_LEADERBOARD_SELECT,
-    orderBy: [
-      { totalScore: "desc" },
-      { rank: "asc" },
-      { evaluatedAt: "asc" }
-    ]
+    orderBy: [{ totalScore: "desc" }, { rank: "asc" }, { evaluatedAt: "asc" }]
   });
+};
+var releaseResults = async (assessmentId, companyId, actorId) => {
+  const assessment = await prisma.assessment.findFirst({
+    where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId),
+    select: {
+      id: true,
+      title: true,
+      status: true,
+      showResultImmediately: true
+    }
+  });
+  if (!assessment) {
+    throw new appError_default(import_http_status_codes40.StatusCodes.NOT_FOUND, "Assessment not found.");
+  }
+  if (assessment.status === "DRAFT") {
+    throw new appError_default(
+      import_http_status_codes40.StatusCodes.CONFLICT,
+      "Publish this assessment before releasing results."
+    );
+  }
+  if (isResultReleasedToCandidate(assessment)) {
+    throw new appError_default(
+      import_http_status_codes40.StatusCodes.CONFLICT,
+      "Results are already released to candidates."
+    );
+  }
+  await prisma.$transaction([
+    prisma.assessment.update({
+      where: { id: assessmentId },
+      data: { showResultImmediately: true }
+    }),
+    prisma.auditLog.create({
+      data: {
+        userId: actorId,
+        action: "STATUS_CHANGE",
+        entity: "Assessment",
+        entityId: assessmentId,
+        oldValue: { showResultImmediately: false },
+        newValue: { showResultImmediately: true },
+        metadata: { reason: "results_released" }
+      }
+    })
+  ]);
+  const [notified, waitingForGrading] = await Promise.all([
+    prisma.result.count({
+      where: { assessmentId, status: { in: ["PASSED", "FAILED"] } }
+    }),
+    prisma.result.count({ where: { assessmentId, status: "PENDING" } })
+  ]);
+  try {
+    await notifyResultsReleased(assessment.id, assessment.title);
+  } catch (error) {
+    console.error("Failed to send result-release notifications", error);
+  }
+  return { released: true, notified, waitingForGrading };
 };
 var computeRanks = async (assessmentId, companyId) => {
   const assessment = await prisma.assessment.findFirst({
     where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId)
   });
   if (!assessment) {
-    throw new appError_default(import_http_status_codes39.StatusCodes.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(import_http_status_codes40.StatusCodes.NOT_FOUND, "Assessment not found.");
   }
   const finalizedResults = await prisma.result.findMany({
     where: {
@@ -8826,7 +9205,7 @@ var computeRanks = async (assessmentId, companyId) => {
   });
   if (finalizedResults.length === 0) {
     throw new appError_default(
-      import_http_status_codes39.StatusCodes.BAD_REQUEST,
+      import_http_status_codes40.StatusCodes.BAD_REQUEST,
       "No fully-graded results to rank yet."
     );
   }
@@ -8856,6 +9235,7 @@ var computeRanks = async (assessmentId, companyId) => {
 var resultService = {
   getResultByAttemptId,
   getResultsForAssessment,
+  releaseResults,
   computeRanks
 };
 
@@ -8871,7 +9251,7 @@ var getResultByAttemptId2 = catchAsync(async (req, res) => {
       ...companyId !== void 0 && { companyId }
     }
   );
-  res.status(import_http_status_codes40.StatusCodes.OK).json({
+  res.status(import_http_status_codes41.StatusCodes.OK).json({
     success: true,
     message: "Result retrieved successfully.",
     data: result
@@ -8885,13 +9265,27 @@ var getResultsForAssessment2 = catchAsync(
       req.params.assessmentId,
       companyId
     );
-    res.status(import_http_status_codes40.StatusCodes.OK).json({
+    res.status(import_http_status_codes41.StatusCodes.OK).json({
       success: true,
       message: "Results retrieved successfully.",
       data: results
     });
   }
 );
+var releaseResults2 = catchAsync(async (req, res) => {
+  const currentUser = req.user;
+  const companyId = await getCompanyIdForUser(currentUser, req);
+  const result = await resultService.releaseResults(
+    req.params.assessmentId,
+    companyId,
+    currentUser.id
+  );
+  res.status(import_http_status_codes41.StatusCodes.OK).json({
+    success: true,
+    message: "Results released to candidates.",
+    data: result
+  });
+});
 var computeRanks2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const companyId = await getCompanyIdForUser(currentUser, req);
@@ -8899,7 +9293,7 @@ var computeRanks2 = catchAsync(async (req, res) => {
     req.params.assessmentId,
     companyId
   );
-  res.status(import_http_status_codes40.StatusCodes.OK).json({
+  res.status(import_http_status_codes41.StatusCodes.OK).json({
     success: true,
     message: `Ranked ${result.ranked} result(s).`,
     data: result
@@ -8908,6 +9302,7 @@ var computeRanks2 = catchAsync(async (req, res) => {
 var resultController = {
   getResultByAttemptId: getResultByAttemptId2,
   getResultsForAssessment: getResultsForAssessment2,
+  releaseResults: releaseResults2,
   computeRanks: computeRanks2
 };
 
@@ -8920,6 +9315,11 @@ router14.get(
   requireRole("RECRUITER", "ADMIN"),
   resultController.getResultsForAssessment
 );
+router14.patch(
+  "/assessments/:assessmentId/release",
+  requireRole("RECRUITER"),
+  resultController.releaseResults
+);
 router14.post(
   "/assessments/:assessmentId/compute-ranks",
   requireRole("RECRUITER"),
@@ -8931,10 +9331,10 @@ var resultRoutes = router14;
 var import_express15 = require("express");
 
 // src/app/modules/user/account.controller.ts
-var import_http_status_codes42 = require("http-status-codes");
+var import_http_status_codes43 = require("http-status-codes");
 
 // src/app/modules/user/account.service.ts
-var import_http_status_codes41 = require("http-status-codes");
+var import_http_status_codes42 = require("http-status-codes");
 var exportMyData = async (userId) => {
   const user = await prisma.user.findFirst({
     where: { id: userId, deletedAt: null },
@@ -8955,7 +9355,7 @@ var exportMyData = async (userId) => {
     }
   });
   if (!user) {
-    throw new appError_default(import_http_status_codes41.StatusCodes.NOT_FOUND, "User not found.");
+    throw new appError_default(import_http_status_codes42.StatusCodes.NOT_FOUND, "User not found.");
   }
   const [
     candidateProfile,
@@ -9129,23 +9529,23 @@ var deleteMyAccount = async (userId, confirmEmail) => {
     select: { id: true, email: true, role: true }
   });
   if (!user) {
-    throw new appError_default(import_http_status_codes41.StatusCodes.NOT_FOUND, "User not found.");
+    throw new appError_default(import_http_status_codes42.StatusCodes.NOT_FOUND, "User not found.");
   }
   if (user.role === "ADMIN") {
     throw new appError_default(
-      import_http_status_codes41.StatusCodes.FORBIDDEN,
+      import_http_status_codes42.StatusCodes.FORBIDDEN,
       "Admin accounts can't be deleted from here."
     );
   }
   if (user.role === "RECRUITER") {
     throw new appError_default(
-      import_http_status_codes41.StatusCodes.CONFLICT,
+      import_http_status_codes42.StatusCodes.CONFLICT,
       "Company accounts can't be deleted from here yet. Please contact us and we will help."
     );
   }
   if (confirmEmail.trim().toLowerCase() !== user.email.toLowerCase()) {
     throw new appError_default(
-      import_http_status_codes41.StatusCodes.BAD_REQUEST,
+      import_http_status_codes42.StatusCodes.BAD_REQUEST,
       "The email you typed doesn't match your account email."
     );
   }
@@ -9158,7 +9558,7 @@ var deleteMyAccount = async (userId, confirmEmail) => {
   });
   if (inProgress > 0) {
     throw new appError_default(
-      import_http_status_codes41.StatusCodes.CONFLICT,
+      import_http_status_codes42.StatusCodes.CONFLICT,
       "You have an assessment in progress. Submit it before deleting your account."
     );
   }
@@ -9192,7 +9592,7 @@ var exportMyData2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const data = await accountService.exportMyData(currentUser.id);
   res.setHeader("Cache-Control", "no-store");
-  res.status(import_http_status_codes42.StatusCodes.OK).json({
+  res.status(import_http_status_codes43.StatusCodes.OK).json({
     success: true,
     message: "Your data export is ready.",
     data
@@ -9204,7 +9604,7 @@ var deleteMyAccount2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.body.confirmEmail
   );
-  res.status(import_http_status_codes42.StatusCodes.OK).json({
+  res.status(import_http_status_codes43.StatusCodes.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -9220,10 +9620,10 @@ var deleteAccountSchema = import_zod14.z.object({
 var accountValidation = { deleteAccountSchema };
 
 // src/app/modules/user/user.controller.ts
-var import_http_status_codes44 = require("http-status-codes");
+var import_http_status_codes45 = require("http-status-codes");
 
 // src/app/modules/user/user.service.ts
-var import_http_status_codes43 = require("http-status-codes");
+var import_http_status_codes44 = require("http-status-codes");
 
 // src/app/modules/user/user.const.ts
 var USER_PUBLIC_SELECT = {
@@ -9270,7 +9670,7 @@ var userQueryBuilder = new QueryBuilder(prisma.user, {
 var assertNotActingOnSelf = (actorId, targetId, action) => {
   if (actorId === targetId) {
     throw new appError_default(
-      import_http_status_codes43.StatusCodes.FORBIDDEN,
+      import_http_status_codes44.StatusCodes.FORBIDDEN,
       `You cannot ${action} your own account.`
     );
   }
@@ -9287,7 +9687,7 @@ var getUserById = async (id) => {
     select: USER_PUBLIC_SELECT
   });
   if (!user) {
-    throw new appError_default(import_http_status_codes43.StatusCodes.NOT_FOUND, "User not found.");
+    throw new appError_default(import_http_status_codes44.StatusCodes.NOT_FOUND, "User not found.");
   }
   return user;
 };
@@ -9299,7 +9699,7 @@ var updateProfile = async (id, payload, file) => {
     }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes43.StatusCodes.NOT_FOUND, "User not found.");
+    throw new appError_default(import_http_status_codes44.StatusCodes.NOT_FOUND, "User not found.");
   }
   const updateData = {
     ...payload
@@ -9330,11 +9730,11 @@ var updateRole = async (id, role, actorId, actorRole) => {
     }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes43.StatusCodes.NOT_FOUND, "User not found.");
+    throw new appError_default(import_http_status_codes44.StatusCodes.NOT_FOUND, "User not found.");
   }
   if ((role === "ADMIN" || existing.role === "ADMIN") && actorRole !== "ADMIN") {
     throw new appError_default(
-      import_http_status_codes43.StatusCodes.FORBIDDEN,
+      import_http_status_codes44.StatusCodes.FORBIDDEN,
       "Only an Admin can assign or modify Admin privileges."
     );
   }
@@ -9363,7 +9763,7 @@ var updateStatus = async (id, status, actorId) => {
     }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes43.StatusCodes.NOT_FOUND, "User not found.");
+    throw new appError_default(import_http_status_codes44.StatusCodes.NOT_FOUND, "User not found.");
   }
   const updatedUser = await prisma.user.update({
     where: {
@@ -9393,7 +9793,7 @@ var softDeleteUser = async (id, actorId) => {
     }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes43.StatusCodes.NOT_FOUND, "User not found.");
+    throw new appError_default(import_http_status_codes44.StatusCodes.NOT_FOUND, "User not found.");
   }
   await prisma.user.update({
     where: {
@@ -9423,7 +9823,7 @@ var getAllUsers2 = catchAsync(async (req, res) => {
   const result = await userService.getAllUsers(
     req.query
   );
-  res.status(import_http_status_codes44.StatusCodes.OK).json({
+  res.status(import_http_status_codes45.StatusCodes.OK).json({
     success: true,
     message: "Users retrieved successfully.",
     meta: result.meta,
@@ -9432,7 +9832,7 @@ var getAllUsers2 = catchAsync(async (req, res) => {
 });
 var getUserById2 = catchAsync(async (req, res) => {
   const user = await userService.getUserById(req.params.id);
-  res.status(import_http_status_codes44.StatusCodes.OK).json({
+  res.status(import_http_status_codes45.StatusCodes.OK).json({
     success: true,
     message: "User retrieved successfully.",
     data: user
@@ -9441,7 +9841,7 @@ var getUserById2 = catchAsync(async (req, res) => {
 var getMyProfile3 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const user = await userService.getUserById(currentUser.id);
-  res.status(import_http_status_codes44.StatusCodes.OK).json({
+  res.status(import_http_status_codes45.StatusCodes.OK).json({
     success: true,
     message: "Profile retrieved successfully.",
     data: user
@@ -9454,7 +9854,7 @@ var updateMyProfile = catchAsync(async (req, res) => {
     req.body,
     req.file
   );
-  res.status(import_http_status_codes44.StatusCodes.OK).json({
+  res.status(import_http_status_codes45.StatusCodes.OK).json({
     success: true,
     message: "Profile updated successfully.",
     data: user
@@ -9468,7 +9868,7 @@ var updateRole2 = catchAsync(async (req, res) => {
     currentUser.id,
     currentUser.role
   );
-  res.status(import_http_status_codes44.StatusCodes.OK).json({
+  res.status(import_http_status_codes45.StatusCodes.OK).json({
     success: true,
     message: "User role updated successfully.",
     data: user
@@ -9481,7 +9881,7 @@ var updateStatus2 = catchAsync(async (req, res) => {
     req.body.status,
     currentUser.id
   );
-  res.status(import_http_status_codes44.StatusCodes.OK).json({
+  res.status(import_http_status_codes45.StatusCodes.OK).json({
     success: true,
     message: "User status updated successfully.",
     data: user
@@ -9490,7 +9890,7 @@ var updateStatus2 = catchAsync(async (req, res) => {
 var deleteUser = catchAsync(async (req, res) => {
   const currentUser = req.user;
   await userService.softDeleteUser(req.params.id, currentUser.id);
-  res.status(import_http_status_codes44.StatusCodes.OK).json({
+  res.status(import_http_status_codes45.StatusCodes.OK).json({
     success: true,
     message: "User deleted successfully.",
     data: null
@@ -9544,10 +9944,10 @@ var userRoutes = router15;
 var import_express16 = require("express");
 
 // src/app/modules/blog/blog.controller.ts
-var import_http_status_codes46 = require("http-status-codes");
+var import_http_status_codes47 = require("http-status-codes");
 
 // src/app/modules/blog/blog.service.ts
-var import_http_status_codes45 = require("http-status-codes");
+var import_http_status_codes46 = require("http-status-codes");
 
 // src/app/utils/readingTime.ts
 var WORDS_PER_MINUTE = 200;
@@ -9634,7 +10034,7 @@ var assertCategoryExists = async (categoryId) => {
     select: { id: true }
   });
   if (!category) {
-    throw new appError_default(import_http_status_codes45.StatusCodes.BAD_REQUEST, "Blog category not found.");
+    throw new appError_default(import_http_status_codes46.StatusCodes.BAD_REQUEST, "Blog category not found.");
   }
 };
 var publicPostWhere = (query) => {
@@ -9682,7 +10082,7 @@ var getPublishedPostBySlug = async (slug) => {
     select: BLOG_POST_DETAIL_SELECT
   });
   if (!post) {
-    throw new appError_default(import_http_status_codes45.StatusCodes.NOT_FOUND, "Blog post not found.");
+    throw new appError_default(import_http_status_codes46.StatusCodes.NOT_FOUND, "Blog post not found.");
   }
   const related = await prisma.blogPost.findMany({
     where: {
@@ -9730,7 +10130,7 @@ var getAuthor = async (id) => {
     select: BLOG_AUTHOR_PUBLIC_SELECT
   });
   if (!author) {
-    throw new appError_default(import_http_status_codes45.StatusCodes.NOT_FOUND, "Author not found.");
+    throw new appError_default(import_http_status_codes46.StatusCodes.NOT_FOUND, "Author not found.");
   }
   const postCount = await prisma.blogPost.count({
     where: { authorId: id, status: "PUBLISHED", deletedAt: null }
@@ -9766,7 +10166,7 @@ var getAdminPostById = async (id) => {
     select: BLOG_POST_DETAIL_SELECT
   });
   if (!post) {
-    throw new appError_default(import_http_status_codes45.StatusCodes.NOT_FOUND, "Blog post not found.");
+    throw new appError_default(import_http_status_codes46.StatusCodes.NOT_FOUND, "Blog post not found.");
   }
   return flattenTags(post);
 };
@@ -9800,7 +10200,7 @@ var updatePost = async (id, payload) => {
     select: { id: true }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes45.StatusCodes.NOT_FOUND, "Blog post not found.");
+    throw new appError_default(import_http_status_codes46.StatusCodes.NOT_FOUND, "Blog post not found.");
   }
   if (payload.categoryId !== void 0) {
     await assertCategoryExists(payload.categoryId);
@@ -9833,7 +10233,7 @@ var publishPost = async (id, actorId) => {
     select: { id: true, status: true, publishedAt: true }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes45.StatusCodes.NOT_FOUND, "Blog post not found.");
+    throw new appError_default(import_http_status_codes46.StatusCodes.NOT_FOUND, "Blog post not found.");
   }
   if (existing.status === "PUBLISHED") return getAdminPostById(id);
   await prisma.$transaction([
@@ -9861,7 +10261,7 @@ var unpublishPost = async (id, actorId) => {
     select: { id: true, status: true }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes45.StatusCodes.NOT_FOUND, "Blog post not found.");
+    throw new appError_default(import_http_status_codes46.StatusCodes.NOT_FOUND, "Blog post not found.");
   }
   if (existing.status !== "PUBLISHED") return getAdminPostById(id);
   await prisma.$transaction([
@@ -9885,7 +10285,7 @@ var softDeletePost = async (id, actorId) => {
     select: { id: true, title: true }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes45.StatusCodes.NOT_FOUND, "Blog post not found.");
+    throw new appError_default(import_http_status_codes46.StatusCodes.NOT_FOUND, "Blog post not found.");
   }
   await prisma.$transaction([
     prisma.blogPost.update({ where: { id }, data: { deletedAt: /* @__PURE__ */ new Date() } }),
@@ -9908,7 +10308,7 @@ var createCategory = async (payload) => {
   });
   if (duplicate) {
     throw new appError_default(
-      import_http_status_codes45.StatusCodes.CONFLICT,
+      import_http_status_codes46.StatusCodes.CONFLICT,
       "A category with this name already exists."
     );
   }
@@ -9934,7 +10334,7 @@ var updateCategory = async (id, payload) => {
     select: { id: true }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes45.StatusCodes.NOT_FOUND, "Blog category not found.");
+    throw new appError_default(import_http_status_codes46.StatusCodes.NOT_FOUND, "Blog category not found.");
   }
   if (payload.name !== void 0) {
     const duplicate = await prisma.blogCategory.findFirst({
@@ -9946,7 +10346,7 @@ var updateCategory = async (id, payload) => {
     });
     if (duplicate) {
       throw new appError_default(
-        import_http_status_codes45.StatusCodes.CONFLICT,
+        import_http_status_codes46.StatusCodes.CONFLICT,
         "A category with this name already exists."
       );
     }
@@ -9969,12 +10369,12 @@ var deleteCategory = async (id) => {
     select: { id: true }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes45.StatusCodes.NOT_FOUND, "Blog category not found.");
+    throw new appError_default(import_http_status_codes46.StatusCodes.NOT_FOUND, "Blog category not found.");
   }
   const postCount = await prisma.blogPost.count({ where: { categoryId: id } });
   if (postCount > 0) {
     throw new appError_default(
-      import_http_status_codes45.StatusCodes.CONFLICT,
+      import_http_status_codes46.StatusCodes.CONFLICT,
       "This category still has posts. Move them to another category first."
     );
   }
@@ -9983,7 +10383,7 @@ var deleteCategory = async (id) => {
 };
 var uploadCover = async (file) => {
   if (!file) {
-    throw new appError_default(import_http_status_codes45.StatusCodes.BAD_REQUEST, "An image file is required.");
+    throw new appError_default(import_http_status_codes46.StatusCodes.BAD_REQUEST, "An image file is required.");
   }
   const uploaded = await uploadFileToCloudinary(
     file.buffer,
@@ -10022,7 +10422,7 @@ var queryOf = (req) => req.query;
 var getPublishedPosts2 = catchAsync(async (req, res) => {
   const result = await blogService.getPublishedPosts(queryOf(req));
   setPublicCache(res);
-  res.status(import_http_status_codes46.StatusCodes.OK).json({
+  res.status(import_http_status_codes47.StatusCodes.OK).json({
     success: true,
     message: "Blog posts retrieved successfully.",
     meta: result.meta,
@@ -10032,7 +10432,7 @@ var getPublishedPosts2 = catchAsync(async (req, res) => {
 var getPublishedPostBySlug2 = catchAsync(async (req, res) => {
   const post = await blogService.getPublishedPostBySlug(req.params.slug);
   setPublicCache(res);
-  res.status(import_http_status_codes46.StatusCodes.OK).json({
+  res.status(import_http_status_codes47.StatusCodes.OK).json({
     success: true,
     message: "Blog post retrieved successfully.",
     data: post
@@ -10041,7 +10441,7 @@ var getPublishedPostBySlug2 = catchAsync(async (req, res) => {
 var getCategories2 = catchAsync(async (_req, res) => {
   const categories = await blogService.getCategories();
   setPublicCache(res);
-  res.status(import_http_status_codes46.StatusCodes.OK).json({
+  res.status(import_http_status_codes47.StatusCodes.OK).json({
     success: true,
     message: "Blog categories retrieved successfully.",
     data: categories
@@ -10050,7 +10450,7 @@ var getCategories2 = catchAsync(async (_req, res) => {
 var getTags2 = catchAsync(async (_req, res) => {
   const tags = await blogService.getTags();
   setPublicCache(res);
-  res.status(import_http_status_codes46.StatusCodes.OK).json({
+  res.status(import_http_status_codes47.StatusCodes.OK).json({
     success: true,
     message: "Blog tags retrieved successfully.",
     data: tags
@@ -10059,7 +10459,7 @@ var getTags2 = catchAsync(async (_req, res) => {
 var getAuthor2 = catchAsync(async (req, res) => {
   const author = await blogService.getAuthor(req.params.id);
   setPublicCache(res);
-  res.status(import_http_status_codes46.StatusCodes.OK).json({
+  res.status(import_http_status_codes47.StatusCodes.OK).json({
     success: true,
     message: "Author retrieved successfully.",
     data: author
@@ -10067,7 +10467,7 @@ var getAuthor2 = catchAsync(async (req, res) => {
 });
 var getAdminPosts2 = catchAsync(async (req, res) => {
   const result = await blogService.getAdminPosts(queryOf(req));
-  res.status(import_http_status_codes46.StatusCodes.OK).json({
+  res.status(import_http_status_codes47.StatusCodes.OK).json({
     success: true,
     message: "Blog posts retrieved successfully.",
     meta: result.meta,
@@ -10076,7 +10476,7 @@ var getAdminPosts2 = catchAsync(async (req, res) => {
 });
 var getAdminPostById2 = catchAsync(async (req, res) => {
   const post = await blogService.getAdminPostById(req.params.id);
-  res.status(import_http_status_codes46.StatusCodes.OK).json({
+  res.status(import_http_status_codes47.StatusCodes.OK).json({
     success: true,
     message: "Blog post retrieved successfully.",
     data: post
@@ -10085,7 +10485,7 @@ var getAdminPostById2 = catchAsync(async (req, res) => {
 var createPost2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const post = await blogService.createPost(currentUser.id, req.body);
-  res.status(import_http_status_codes46.StatusCodes.CREATED).json({
+  res.status(import_http_status_codes47.StatusCodes.CREATED).json({
     success: true,
     message: "Blog post created successfully.",
     data: post
@@ -10093,7 +10493,7 @@ var createPost2 = catchAsync(async (req, res) => {
 });
 var updatePost2 = catchAsync(async (req, res) => {
   const post = await blogService.updatePost(req.params.id, req.body);
-  res.status(import_http_status_codes46.StatusCodes.OK).json({
+  res.status(import_http_status_codes47.StatusCodes.OK).json({
     success: true,
     message: "Blog post updated successfully.",
     data: post
@@ -10102,7 +10502,7 @@ var updatePost2 = catchAsync(async (req, res) => {
 var publishPost2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const post = await blogService.publishPost(req.params.id, currentUser.id);
-  res.status(import_http_status_codes46.StatusCodes.OK).json({
+  res.status(import_http_status_codes47.StatusCodes.OK).json({
     success: true,
     message: "Blog post published.",
     data: post
@@ -10111,7 +10511,7 @@ var publishPost2 = catchAsync(async (req, res) => {
 var unpublishPost2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const post = await blogService.unpublishPost(req.params.id, currentUser.id);
-  res.status(import_http_status_codes46.StatusCodes.OK).json({
+  res.status(import_http_status_codes47.StatusCodes.OK).json({
     success: true,
     message: "Blog post moved back to draft.",
     data: post
@@ -10120,7 +10520,7 @@ var unpublishPost2 = catchAsync(async (req, res) => {
 var deletePost = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const result = await blogService.softDeletePost(req.params.id, currentUser.id);
-  res.status(import_http_status_codes46.StatusCodes.OK).json({
+  res.status(import_http_status_codes47.StatusCodes.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -10128,7 +10528,7 @@ var deletePost = catchAsync(async (req, res) => {
 });
 var createCategory2 = catchAsync(async (req, res) => {
   const category = await blogService.createCategory(req.body);
-  res.status(import_http_status_codes46.StatusCodes.CREATED).json({
+  res.status(import_http_status_codes47.StatusCodes.CREATED).json({
     success: true,
     message: "Blog category created successfully.",
     data: category
@@ -10136,7 +10536,7 @@ var createCategory2 = catchAsync(async (req, res) => {
 });
 var updateCategory2 = catchAsync(async (req, res) => {
   const category = await blogService.updateCategory(req.params.id, req.body);
-  res.status(import_http_status_codes46.StatusCodes.OK).json({
+  res.status(import_http_status_codes47.StatusCodes.OK).json({
     success: true,
     message: "Blog category updated successfully.",
     data: category
@@ -10144,7 +10544,7 @@ var updateCategory2 = catchAsync(async (req, res) => {
 });
 var deleteCategory2 = catchAsync(async (req, res) => {
   const result = await blogService.deleteCategory(req.params.id);
-  res.status(import_http_status_codes46.StatusCodes.OK).json({
+  res.status(import_http_status_codes47.StatusCodes.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -10152,7 +10552,7 @@ var deleteCategory2 = catchAsync(async (req, res) => {
 });
 var uploadCover2 = catchAsync(async (req, res) => {
   const result = await blogService.uploadCover(req.file);
-  res.status(import_http_status_codes46.StatusCodes.CREATED).json({
+  res.status(import_http_status_codes47.StatusCodes.CREATED).json({
     success: true,
     message: "Cover image uploaded successfully.",
     data: result
@@ -10254,10 +10654,10 @@ var blogRoutes = router16;
 var import_express17 = require("express");
 
 // src/app/modules/contact/contact.controller.ts
-var import_http_status_codes48 = require("http-status-codes");
+var import_http_status_codes49 = require("http-status-codes");
 
 // src/app/modules/contact/contact.service.ts
-var import_http_status_codes47 = require("http-status-codes");
+var import_http_status_codes48 = require("http-status-codes");
 
 // src/app/modules/contact/contact.const.ts
 var CONTACT_MESSAGE_SELECT = {
@@ -10369,7 +10769,7 @@ var updateStatus3 = async (id, payload) => {
     select: { id: true }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes47.StatusCodes.NOT_FOUND, "Message not found.");
+    throw new appError_default(import_http_status_codes48.StatusCodes.NOT_FOUND, "Message not found.");
   }
   return prisma.contactMessage.update({
     where: { id },
@@ -10386,7 +10786,7 @@ var deleteMessage = async (id) => {
     select: { id: true }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes47.StatusCodes.NOT_FOUND, "Message not found.");
+    throw new appError_default(import_http_status_codes48.StatusCodes.NOT_FOUND, "Message not found.");
   }
   await prisma.contactMessage.delete({ where: { id } });
   return { message: "Message deleted successfully." };
@@ -10401,7 +10801,7 @@ var contactService = {
 // src/app/modules/contact/contact.controller.ts
 var createMessage2 = catchAsync(async (req, res) => {
   const result = await contactService.createMessage(req.body);
-  res.status(import_http_status_codes48.StatusCodes.CREATED).json({
+  res.status(import_http_status_codes49.StatusCodes.CREATED).json({
     success: true,
     message: "Thanks! Your message has been sent.",
     data: result
@@ -10411,7 +10811,7 @@ var getMessages2 = catchAsync(async (req, res) => {
   const result = await contactService.getMessages(
     req.query
   );
-  res.status(import_http_status_codes48.StatusCodes.OK).json({
+  res.status(import_http_status_codes49.StatusCodes.OK).json({
     success: true,
     message: "Messages retrieved successfully.",
     meta: result.meta,
@@ -10423,7 +10823,7 @@ var updateStatus4 = catchAsync(async (req, res) => {
     req.params.id,
     req.body
   );
-  res.status(import_http_status_codes48.StatusCodes.OK).json({
+  res.status(import_http_status_codes49.StatusCodes.OK).json({
     success: true,
     message: "Message updated successfully.",
     data: message
@@ -10431,7 +10831,7 @@ var updateStatus4 = catchAsync(async (req, res) => {
 });
 var deleteMessage2 = catchAsync(async (req, res) => {
   const result = await contactService.deleteMessage(req.params.id);
-  res.status(import_http_status_codes48.StatusCodes.OK).json({
+  res.status(import_http_status_codes49.StatusCodes.OK).json({
     success: true,
     message: result.message,
     data: null

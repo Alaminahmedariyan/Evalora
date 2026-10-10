@@ -45,6 +45,23 @@ const getResultsForAssessment = catchAsync(
 	},
 );
 
+const releaseResults = catchAsync(async (req: Request, res: Response) => {
+	const currentUser = req.user as AuthenticatedUser;
+	const companyId = (await getCompanyIdForUser(currentUser, req))!;
+
+	const result = await resultService.releaseResults(
+		req.params.assessmentId as string,
+		companyId,
+		currentUser.id,
+	);
+
+	res.status(StatusCodes.OK).json({
+		success: true,
+		message: "Results released to candidates.",
+		data: result,
+	});
+});
+
 const computeRanks = catchAsync(async (req: Request, res: Response) => {
 	const currentUser = req.user as AuthenticatedUser;
 	const companyId = (await getCompanyIdForUser(currentUser, req))!;
@@ -64,5 +81,6 @@ const computeRanks = catchAsync(async (req: Request, res: Response) => {
 export const resultController = {
 	getResultByAttemptId,
 	getResultsForAssessment,
+	releaseResults,
 	computeRanks,
 };
