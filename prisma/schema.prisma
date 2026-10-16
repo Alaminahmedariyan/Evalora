@@ -7,6 +7,26 @@ datasource db {
   provider = "postgresql"
 }
 
+enum AutomationEventStatus {
+  PENDING
+  PROCESSING
+  DELIVERED
+  FAILED
+}
+
+enum AiReviewStatus {
+  NOT_APPLICABLE
+  PENDING_REVIEW
+  APPROVED
+  OVERRIDDEN
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
 enum UserRole {
   ADMIN
   RECRUITER
@@ -124,6 +144,8 @@ enum NotificationType {
   PAYMENT_SUCCESS
   PAYMENT_FAILED
   SYSTEM
+  PROCTORING_ALERT
+  EVALUATION_REVIEW_NEEDED
 }
 
 enum AuditAction {
@@ -159,6 +181,7 @@ enum ConsentType {
   THIRD_PARTY
   PRIVACY_POLICY
   TERMS_OF_SERVICE
+  AI_PROCESSING
 }
 
 enum BlogPostStatus {
@@ -176,52 +199,37 @@ enum ContactMessageStatus {
 // verification tokens (Account / Session / Verification below). Do not add
 // password fields back onto User.
 model User {
-  id    String  @id @default(cuid())
-  name  String
-  email String  @unique @db.VarChar(320)
-  image String?
-  phone String?
-
-  role     UserRole     @default(CANDIDATE)
-  status   UserStatus   @default(ACTIVE)
-  provider AuthProvider @default(EMAIL)
-
-  emailVerified Boolean @default(false)
-
+  id                 String                 @id @default(cuid())
+  name               String
+  email              String                 @unique @db.VarChar(320)
+  image              String?
+  phone              String?
+  role               UserRole               @default(CANDIDATE)
+  status             UserStatus             @default(ACTIVE)
+  provider           AuthProvider           @default(EMAIL)
+  emailVerified      Boolean                @default(false)
   // Set/read exclusively by the Better Auth twoFactor plugin — do not toggle manually.
-  twoFactorEnabled Boolean @default(false)
-
-  lastLoginAt DateTime? @db.Timestamptz(3)
-
-  deletedAt DateTime? @db.Timestamptz(3)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-
-  company Company?
-
-  accounts   Account[]
-  sessions   Session[]
-  twoFactors TwoFactor[]
-
-  consents UserConsent[]
-
-  candidateProfile CandidateProfile?
-
-  assessmentsCreated Assessment[] @relation("AssessmentCreator")
-
-  invitations AssessmentInvitation[] @relation("CandidateInvitations")
-  attempts    AssessmentAttempt[]    @relation("CandidateAttempts")
-
-  problemsCreated Problem[] @relation("ProblemCreator")
-
-  evaluations SubmissionEvaluation[] @relation("SubmissionEvaluator")
-
-  payments        Payment[]
-  notifications   Notification[]
-  auditLogs       AuditLog[]
-  blogPosts       BlogPost[]       @relation("BlogPostAuthor")
-  idempotencyKeys IdempotencyKey[]
+  twoFactorEnabled   Boolean                @default(false)
+  lastLoginAt        DateTime?              @db.Timestamptz(3)
+  deletedAt          DateTime?              @db.Timestamptz(3)
+  createdAt          DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime               @updatedAt @db.Timestamptz(3)
+  company            Company?
+  accounts           Account[]
+  sessions           Session[]
+  twoFactors         TwoFactor[]
+  consents           UserConsent[]
+  candidateProfile   CandidateProfile?
+  assessmentsCreated Assessment[]           @relation("AssessmentCreator")
+  invitations        AssessmentInvitation[] @relation("CandidateInvitations")
+  attempts           AssessmentAttempt[]    @relation("CandidateAttempts")
+  problemsCreated    Problem[]              @relation("ProblemCreator")
+  evaluations        SubmissionEvaluation[] @relation("SubmissionEvaluator")
+  payments           Payment[]
+  notifications      Notification[]
+  auditLogs          AuditLog[]
+  blogPosts          BlogPost[]             @relation("BlogPostAuthor")
+  idempotencyKeys    IdempotencyKey[]
 
   @@index([role])
   @@index([status])
@@ -234,25 +242,21 @@ model User {
 // issuer is required by Better Auth 1.7+ (e.g. "local:credential",
 // "local:oauth:google"); uniqueness is on (issuer, accountId).
 model Account {
-  id         String @id @default(cuid())
-  userId     String
-  accountId  String
-  providerId String
-  issuer     String
-
-  password String?
-
+  id                    String    @id @default(cuid())
+  userId                String
+  accountId             String
+  providerId            String
+  issuer                String
+  password              String?
   accessToken           String?
   refreshToken          String?
   idToken               String?
   accessTokenExpiresAt  DateTime?
   refreshTokenExpiresAt DateTime?
   scope                 String?
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt             DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime  @updatedAt @db.Timestamptz(3)
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([issuer, accountId])
   @@index([userId])
@@ -265,8 +269,7 @@ model TwoFactor {
   userId      String
   secret      String
   backupCodes String?
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId])
   @@map("two_factors")
@@ -279,11 +282,9 @@ model Session {
   expiresAt DateTime @db.Timestamptz(3)
   ipAddress String?
   userAgent String?
-
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([expiresAt])
@@ -295,9 +296,8 @@ model Verification {
   identifier String
   value      String
   expiresAt  DateTime @db.Timestamptz(3)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([identifier, value])
   @@index([identifier])
@@ -309,26 +309,19 @@ model Verification {
 // To delete an owner, transfer ownership first, then delete the old user.
 // Do not switch this to SetNull.
 model Company {
-  id String @id @default(cuid())
-
-  name        String
-  slug        String  @unique
-  description String?
-
-  website  String?
-  industry String?
-  logo     String?
-
-  isVerified Boolean @default(false)
-
-  ownerId String @unique
-  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Restrict)
-
-  deletedAt DateTime? @db.Timestamptz(3)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-
+  id           String        @id @default(cuid())
+  name         String
+  slug         String        @unique
+  description  String?
+  website      String?
+  industry     String?
+  logo         String?
+  isVerified   Boolean       @default(false)
+  ownerId      String        @unique
+  owner        User          @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  deletedAt    DateTime?     @db.Timestamptz(3)
+  createdAt    DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime      @updatedAt @db.Timestamptz(3)
   assessments  Assessment[]
   problems     Problem[]
   subscription Subscription?
@@ -339,27 +332,24 @@ model Company {
 }
 
 model CandidateProfile {
-  id String @id @default(cuid())
-
-  userId String @unique
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  headline     String?
-  bio          String?
-  phone        String?
-  location     String?
-  resumeUrl    String?
-  linkedinUrl  String?
-  githubUrl    String?
-  portfolioUrl String?
-  skills          Json?
-  experienceYears Int?
-
-  deletedAt DateTime? @db.Timestamptz(3)
-
-  createdAt             DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt             DateTime @updatedAt @db.Timestamptz(3)
-  isVisibleToRecruiters Boolean  @default(true)
+  id                    String    @id @default(cuid())
+  userId                String    @unique
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  headline              String?
+  bio                   String?
+  phone                 String?
+  location              String?
+  resumeUrl             String?
+  linkedinUrl           String?
+  githubUrl             String?
+  portfolioUrl          String?
+  skills                Json?
+  experienceYears       Int?
+  resumeParsedAt        DateTime? @db.Timestamptz(3)
+  deletedAt             DateTime? @db.Timestamptz(3)
+  createdAt             DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime  @updatedAt @db.Timestamptz(3)
+  isVisibleToRecruiters Boolean   @default(true)
 
   @@index([deletedAt])
   @@index([isVisibleToRecruiters, deletedAt])
@@ -367,53 +357,38 @@ model CandidateProfile {
 }
 
 model Assessment {
-  id String @id @default(cuid())
-
-  title String
-  slug  String
-
-  description  String?
-  instructions String?
-
-  durationMinutes Int
-
-  totalMarks   Int
-  passingMarks Int
-
-  maxAttempts Int @default(1)
-
-  status AssessmentStatus @default(DRAFT)
-
-  startAt     DateTime? @db.Timestamptz(3)
-  endAt       DateTime? @db.Timestamptz(3)
-  publishedAt DateTime? @db.Timestamptz(3)
-
-  shuffleQuestions      Boolean @default(false)
-  showResultImmediately Boolean @default(false)
-  allowReview           Boolean @default(true)
-
-  version         Int     @default(1)
-  isLatestVersion Boolean @default(true)
-
-  parentAssessmentId String?
-  parentAssessment   Assessment?  @relation("AssessmentVersions", fields: [parentAssessmentId], references: [id], onDelete: SetNull)
-  childVersions      Assessment[] @relation("AssessmentVersions")
-
-  companyId String
-  company   Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
-
-  createdById String
-  createdBy   User   @relation("AssessmentCreator", fields: [createdById], references: [id], onDelete: Restrict)
-
-  deletedAt DateTime? @db.Timestamptz(3)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-
-  assessmentProblems AssessmentProblem[]
-  invitations        AssessmentInvitation[]
-  attempts           AssessmentAttempt[]
-  results            Result[]
+  id                    String                 @id @default(cuid())
+  title                 String
+  slug                  String
+  description           String?
+  instructions          String?
+  durationMinutes       Int
+  totalMarks            Int
+  passingMarks          Int
+  maxAttempts           Int                    @default(1)
+  status                AssessmentStatus       @default(DRAFT)
+  startAt               DateTime?              @db.Timestamptz(3)
+  endAt                 DateTime?              @db.Timestamptz(3)
+  publishedAt           DateTime?              @db.Timestamptz(3)
+  shuffleQuestions      Boolean                @default(false)
+  showResultImmediately Boolean                @default(false)
+  allowReview           Boolean                @default(true)
+  version               Int                    @default(1)
+  isLatestVersion       Boolean                @default(true)
+  parentAssessmentId    String?
+  parentAssessment      Assessment?            @relation("AssessmentVersions", fields: [parentAssessmentId], references: [id], onDelete: SetNull)
+  childVersions         Assessment[]           @relation("AssessmentVersions")
+  companyId             String
+  company               Company                @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  createdById           String
+  createdBy             User                   @relation("AssessmentCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  deletedAt             DateTime?              @db.Timestamptz(3)
+  createdAt             DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime               @updatedAt @db.Timestamptz(3)
+  assessmentProblems    AssessmentProblem[]
+  invitations           AssessmentInvitation[]
+  attempts              AssessmentAttempt[]
+  results               Result[]
 
   @@unique([companyId, slug, version])
   @@index([companyId, createdAt])
@@ -429,34 +404,26 @@ model Assessment {
 // must verify problem.companyId === assessment.companyId before creating an
 // AssessmentProblem row; this is not enforced by the schema.
 model Problem {
-  id String @id @default(cuid())
-
-  title       String
-  slug        String
-  description String
-
-  type       ProblemType
-  difficulty Difficulty  @default(MEDIUM)
-
-  defaultMarks     Int  @default(10)
-  timeLimitSeconds Int?
-
-  companyId String
-  company   Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
-
-  createdById String
-  createdBy   User   @relation("ProblemCreator", fields: [createdById], references: [id], onDelete: Restrict)
-
-  isPublic Boolean @default(false)
-
-  deletedAt DateTime? @db.Timestamptz(3)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-
-  mcqProblem McqProblem?
-  testCases  TestCase[]
-
+  id                 String              @id @default(cuid())
+  title              String
+  slug               String
+  description        String
+  type               ProblemType
+  difficulty         Difficulty          @default(MEDIUM)
+  rubric             String?
+  isAiGenerated      Boolean             @default(false)
+  defaultMarks       Int                 @default(10)
+  timeLimitSeconds   Int?
+  companyId          String
+  company            Company             @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  createdById        String
+  createdBy          User                @relation("ProblemCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  isPublic           Boolean             @default(false)
+  deletedAt          DateTime?           @db.Timestamptz(3)
+  createdAt          DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime            @updatedAt @db.Timestamptz(3)
+  mcqProblem         McqProblem?
+  testCases          TestCase[]
   assessmentProblems AssessmentProblem[]
   submissions        Submission[]
 
@@ -474,29 +441,23 @@ model Problem {
 }
 
 model McqProblem {
-  id String @id @default(cuid())
-
-  problemId String  @unique
-  problem   Problem @relation(fields: [problemId], references: [id], onDelete: Cascade)
-
+  id          String      @id @default(cuid())
+  problemId   String      @unique
+  problem     Problem     @relation(fields: [problemId], references: [id], onDelete: Cascade)
   type        McqType
   explanation String?
-
-  options McqOption[]
+  options     McqOption[]
 
   @@map("mcq_problems")
 }
 
 model McqOption {
-  id String @id @default(cuid())
-
-  mcqProblemId String
-  mcqProblem   McqProblem @relation(fields: [mcqProblemId], references: [id], onDelete: Cascade)
-
-  optionText String
-  order      Int
-  isCorrect  Boolean @default(false)
-
+  id                String             @id @default(cuid())
+  mcqProblemId      String
+  mcqProblem        McqProblem         @relation(fields: [mcqProblemId], references: [id], onDelete: Cascade)
+  optionText        String
+  order             Int
+  isCorrect         Boolean            @default(false)
   submissionAnswers SubmissionAnswer[]
 
   @@unique([mcqProblemId, order])
@@ -506,23 +467,17 @@ model McqOption {
 }
 
 model TestCase {
-  id String @id @default(cuid())
-
-  problemId String
-  problem   Problem @relation(fields: [problemId], references: [id], onDelete: Cascade)
-
+  id             String           @id @default(cuid())
+  problemId      String
+  problem        Problem          @relation(fields: [problemId], references: [id], onDelete: Cascade)
   input          String?
   expectedOutput String
-
-  isSample Boolean @default(false)
-  points   Int     @default(0)
-
-  timeLimitMs   Int?
-  memoryLimitMb Int?
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-
-  results TestCaseResult[]
+  isSample       Boolean          @default(false)
+  points         Int              @default(0)
+  timeLimitMs    Int?
+  memoryLimitMb  Int?
+  createdAt      DateTime         @default(now()) @db.Timestamptz(3)
+  results        TestCaseResult[]
 
   @@index([problemId])
   @@index([problemId, isSample])
@@ -530,18 +485,14 @@ model TestCase {
 }
 
 model AssessmentProblem {
-  id String @id @default(cuid())
-
+  id           String     @id @default(cuid())
   assessmentId String
   assessment   Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
-
-  problemId String
-  problem   Problem @relation(fields: [problemId], references: [id], onDelete: Restrict)
-
-  order Int
-  marks Int
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  problemId    String
+  problem      Problem    @relation(fields: [problemId], references: [id], onDelete: Restrict)
+  order        Int
+  marks        Int
+  createdAt    DateTime   @default(now()) @db.Timestamptz(3)
 
   @@unique([assessmentId, problemId])
   @@unique([assessmentId, order])
@@ -553,28 +504,22 @@ model AssessmentProblem {
 // AssessmentAttempt.assessment — assessments with real attempt/invitation
 // history cannot be hard-deleted. Archive instead of deleting.
 model AssessmentInvitation {
-  id String @id @default(cuid())
-
-  assessmentId String
-  assessment   Assessment @relation(fields: [assessmentId], references: [id], onDelete: Restrict)
-
+  id             String              @id @default(cuid())
+  assessmentId   String
+  assessment     Assessment          @relation(fields: [assessmentId], references: [id], onDelete: Restrict)
   // Nullable because an invitation can be created by email before the
   // candidate has an account.
-  candidateId String?
-  candidate   User?   @relation("CandidateInvitations", fields: [candidateId], references: [id], onDelete: SetNull)
-
-  email String @db.VarChar(320)
-
-  status InvitationStatus @default(PENDING)
-
-  tokenHash String @unique @db.VarChar(64)
-
-  invitedAt   DateTime  @default(now()) @db.Timestamptz(3)
-  acceptedAt  DateTime? @db.Timestamptz(3)
-  expiresAt   DateTime? @db.Timestamptz(3)
-  completedAt DateTime? @db.Timestamptz(3)
-
-  attempts AssessmentAttempt[]
+  candidateId    String?
+  candidate      User?               @relation("CandidateInvitations", fields: [candidateId], references: [id], onDelete: SetNull)
+  email          String              @db.VarChar(320)
+  status         InvitationStatus    @default(PENDING)
+  tokenHash      String              @unique @db.VarChar(64)
+  invitedAt      DateTime            @default(now()) @db.Timestamptz(3)
+  acceptedAt     DateTime?           @db.Timestamptz(3)
+  expiresAt      DateTime?           @db.Timestamptz(3)
+  completedAt    DateTime?           @db.Timestamptz(3)
+  reminderSentAt DateTime?           @db.Timestamptz(3)
+  attempts       AssessmentAttempt[]
 
   @@unique([assessmentId, email])
   @@index([email])
@@ -588,37 +533,28 @@ model AssessmentInvitation {
 // invitation legitimately backs multiple attempts. Uniqueness of an
 // individual attempt is enforced via [assessmentId, candidateId, attemptNumber].
 model AssessmentAttempt {
-  id String @id @default(cuid())
-
-  assessmentId String
-  assessment   Assessment @relation(fields: [assessmentId], references: [id], onDelete: Restrict)
-
-  candidateId String
-  candidate   User   @relation("CandidateAttempts", fields: [candidateId], references: [id], onDelete: Cascade)
-
-  invitationId String?
-  invitation   AssessmentInvitation? @relation(fields: [invitationId], references: [id], onDelete: SetNull)
-
-  attemptNumber Int @default(1)
-
-  status AttemptStatus @default(NOT_STARTED)
-
-  startedAt       DateTime? @db.Timestamptz(3)
-  submittedAt     DateTime? @db.Timestamptz(3)
-  expiresAt       DateTime  @db.Timestamptz(3)
-  autoSubmittedAt DateTime? @db.Timestamptz(3)
-
+  id               String                @id @default(cuid())
+  assessmentId     String
+  assessment       Assessment            @relation(fields: [assessmentId], references: [id], onDelete: Restrict)
+  candidateId      String
+  candidate        User                  @relation("CandidateAttempts", fields: [candidateId], references: [id], onDelete: Cascade)
+  invitationId     String?
+  invitation       AssessmentInvitation? @relation(fields: [invitationId], references: [id], onDelete: SetNull)
+  attemptNumber    Int                   @default(1)
+  status           AttemptStatus         @default(NOT_STARTED)
+  startedAt        DateTime?             @db.Timestamptz(3)
+  submittedAt      DateTime?             @db.Timestamptz(3)
+  expiresAt        DateTime              @db.Timestamptz(3)
+  autoSubmittedAt  DateTime?             @db.Timestamptz(3)
   // Must be incremented in the same transaction as the matching ProctoringEvent insert.
-  tabSwitchCount Int @default(0)
-
-  ipAddress String?
-  userAgent String?
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-
+  tabSwitchCount   Int                   @default(0)
+  ipAddress        String?
+  userAgent        String?
+  createdAt        DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime              @updatedAt @db.Timestamptz(3)
   submissions      Submission[]
   result           Result?
+  report           AttemptReport?
   proctoringEvents ProctoringEvent[]
 
   @@unique([assessmentId, candidateId, attemptNumber])
@@ -633,30 +569,20 @@ model AssessmentAttempt {
 
 // One submission per problem per attempt.
 model Submission {
-  id String @id @default(cuid())
-
-  attemptId String
-  attempt   AssessmentAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
-
-  problemId String
-  problem   Problem @relation(fields: [problemId], references: [id], onDelete: Restrict)
-
-  answerText String?
-
-  code     String?
-  language String?
-
-  status SubmissionStatus @default(DRAFT)
-
-  submittedAt DateTime? @db.Timestamptz(3)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-
-  answers SubmissionAnswer[]
-
-  evaluation SubmissionEvaluation?
-
+  id              String                @id @default(cuid())
+  attemptId       String
+  attempt         AssessmentAttempt     @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  problemId       String
+  problem         Problem               @relation(fields: [problemId], references: [id], onDelete: Restrict)
+  answerText      String?
+  code            String?
+  language        String?
+  status          SubmissionStatus      @default(DRAFT)
+  submittedAt     DateTime?             @db.Timestamptz(3)
+  createdAt       DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime              @updatedAt @db.Timestamptz(3)
+  answers         SubmissionAnswer[]
+  evaluation      SubmissionEvaluation?
   testCaseResults TestCaseResult[]
 
   @@unique([attemptId, problemId])
@@ -667,15 +593,12 @@ model Submission {
 }
 
 model SubmissionAnswer {
-  id String @id @default(cuid())
-
+  id           String     @id @default(cuid())
   submissionId String
   submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
-
-  optionId String
-  option   McqOption @relation(fields: [optionId], references: [id], onDelete: Restrict)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  optionId     String
+  option       McqOption  @relation(fields: [optionId], references: [id], onDelete: Restrict)
+  createdAt    DateTime   @default(now()) @db.Timestamptz(3)
 
   @@unique([submissionId, optionId])
   @@index([submissionId])
@@ -685,57 +608,48 @@ model SubmissionAnswer {
 
 // Single source of truth for a submission's score.
 model SubmissionEvaluation {
-  id String @id @default(cuid())
-
-  submissionId String     @unique
-  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
-
-  evaluatorId String?
-  evaluator   User?   @relation("SubmissionEvaluator", fields: [evaluatorId], references: [id], onDelete: SetNull)
-
-  score    Int @default(0)
-  maxScore Int
-
-  feedback String?
-
+  id              String           @id @default(cuid())
+  submissionId    String           @unique
+  submission      Submission       @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  evaluatorId     String?
+  evaluator       User?            @relation("SubmissionEvaluator", fields: [evaluatorId], references: [id], onDelete: SetNull)
+  score           Int              @default(0)
+  maxScore        Int
+  feedback        String?
   status          EvaluationStatus @default(PENDING)
   isAutoEvaluated Boolean          @default(false)
-
-  evaluatedAt DateTime? @db.Timestamptz(3)
-
-  metadata Json?
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  aiScore         Int?
+  aiFeedback      String?
+  aiModel         String?
+  aiEvaluatedAt   DateTime?        @db.Timestamptz(3)
+  reviewStatus    AiReviewStatus   @default(NOT_APPLICABLE)
+  reviewedAt      DateTime?        @db.Timestamptz(3)
+  evaluatedAt     DateTime?        @db.Timestamptz(3)
+  metadata        Json?
+  createdAt       DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime         @updatedAt @db.Timestamptz(3)
 
   @@index([evaluatorId])
   @@index([status, evaluatedAt])
   @@index([isAutoEvaluated])
+  @@index([reviewStatus])
   @@map("submission_evaluations")
 }
 
 model TestCaseResult {
-  id String @id @default(cuid())
-
-  submissionId String
-  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
-
-  testCaseId String
-  testCase   TestCase @relation(fields: [testCaseId], references: [id], onDelete: Restrict)
-
-  passed Boolean @default(false)
-
-  actualOutput   String?
-  expectedOutput String?
-
+  id              String     @id @default(cuid())
+  submissionId    String
+  submission      Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  testCaseId      String
+  testCase        TestCase   @relation(fields: [testCaseId], references: [id], onDelete: Restrict)
+  passed          Boolean    @default(false)
+  actualOutput    String?
+  expectedOutput  String?
   executionTimeMs Int?
   memoryUsedMb    Int?
-
-  points Int @default(0)
-
-  errorMessage String?
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  points          Int        @default(0)
+  errorMessage    String?
+  createdAt       DateTime   @default(now()) @db.Timestamptz(3)
 
   @@unique([submissionId, testCaseId])
   @@index([submissionId])
@@ -746,26 +660,19 @@ model TestCaseResult {
 
 // Attempt-level source of truth.
 model Result {
-  id String @id @default(cuid())
-
-  attemptId String            @unique
-  attempt   AssessmentAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
-
+  id           String            @id @default(cuid())
+  attemptId    String            @unique
+  attempt      AssessmentAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
   assessmentId String
-  assessment   Assessment @relation(fields: [assessmentId], references: [id], onDelete: Restrict)
-
-  totalScore Int   @default(0)
-  totalMarks Int
-  percentage Float @default(0)
-
-  status ResultStatus @default(PENDING)
-
-  rank Int?
-
-  evaluatedAt DateTime? @db.Timestamptz(3)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  assessment   Assessment        @relation(fields: [assessmentId], references: [id], onDelete: Restrict)
+  totalScore   Int               @default(0)
+  totalMarks   Int
+  percentage   Float             @default(0)
+  status       ResultStatus      @default(PENDING)
+  rank         Int?
+  evaluatedAt  DateTime?         @db.Timestamptz(3)
+  createdAt    DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime          @updatedAt @db.Timestamptz(3)
 
   @@index([assessmentId, totalScore])
   @@index([assessmentId, rank])
@@ -776,16 +683,12 @@ model Result {
 }
 
 model ProctoringEvent {
-  id String @id @default(cuid())
-
+  id        String              @id @default(cuid())
   attemptId String
-  attempt   AssessmentAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
-
+  attempt   AssessmentAttempt   @relation(fields: [attemptId], references: [id], onDelete: Cascade)
   eventType ProctoringEventType
-
-  timestamp DateTime @default(now()) @db.Timestamptz(3)
-
-  metadata Json?
+  timestamp DateTime            @default(now()) @db.Timestamptz(3)
+  metadata  Json?
 
   @@index([attemptId, timestamp])
   @@index([attemptId, eventType, timestamp])
@@ -794,27 +697,20 @@ model ProctoringEvent {
 }
 
 model Subscription {
-  id String @id @default(cuid())
-
-  companyId String  @unique
-  company   Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
-
-  plan   SubscriptionPlan   @default(FREE)
-  status SubscriptionStatus @default(ACTIVE)
-
-  stripeCustomerId     String? @unique
-  stripeSubscriptionId String? @unique
-
-  currentPeriodStart DateTime? @db.Timestamptz(3)
-  currentPeriodEnd   DateTime? @db.Timestamptz(3)
-
-  cancelAtPeriodEnd Boolean   @default(false)
-  cancelledAt       DateTime? @db.Timestamptz(3)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-
-  payments Payment[]
+  id                   String             @id @default(cuid())
+  companyId            String             @unique
+  company              Company            @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  plan                 SubscriptionPlan   @default(FREE)
+  status               SubscriptionStatus @default(ACTIVE)
+  stripeCustomerId     String?            @unique
+  stripeSubscriptionId String?            @unique
+  currentPeriodStart   DateTime?          @db.Timestamptz(3)
+  currentPeriodEnd     DateTime?          @db.Timestamptz(3)
+  cancelAtPeriodEnd    Boolean            @default(false)
+  cancelledAt          DateTime?          @db.Timestamptz(3)
+  createdAt            DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime           @updatedAt @db.Timestamptz(3)
+  payments             Payment[]
 
   @@index([plan])
   @@index([status])
@@ -823,34 +719,25 @@ model Subscription {
 }
 
 model Payment {
-  id String @id @default(cuid())
-
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
-
-  companyId String?
-  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
-
-  subscriptionId String?
-  subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
-
-  provider PaymentProvider
-  status   PaymentStatus   @default(PENDING)
-
-  amountMinor BigInt
-  currency    String @default("USD") @db.VarChar(3)
-
-  transactionId     String? @unique
-  providerPaymentId String? @unique
-  idempotencyKey    String? @unique
-
-  metadata Json?
-
-  paidAt   DateTime? @db.Timestamptz(3)
-  failedAt DateTime? @db.Timestamptz(3)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  id                String          @id @default(cuid())
+  userId            String
+  user              User            @relation(fields: [userId], references: [id], onDelete: Restrict)
+  companyId         String?
+  company           Company?        @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  subscriptionId    String?
+  subscription      Subscription?   @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  provider          PaymentProvider
+  status            PaymentStatus   @default(PENDING)
+  amountMinor       BigInt
+  currency          String          @default("USD") @db.VarChar(3)
+  transactionId     String?         @unique
+  providerPaymentId String?         @unique
+  idempotencyKey    String?         @unique
+  metadata          Json?
+  paidAt            DateTime?       @db.Timestamptz(3)
+  failedAt          DateTime?       @db.Timestamptz(3)
+  createdAt         DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime        @updatedAt @db.Timestamptz(3)
 
   @@index([userId, createdAt])
   @@index([companyId, createdAt])
@@ -861,25 +748,18 @@ model Payment {
 }
 
 model PaymentWebhookEvent {
-  id String @id @default(cuid())
-
-  provider PaymentProvider
-
-  eventId   String
-  eventType String
-
-  payload Json
-
-  processed   Boolean   @default(false)
-  processedAt DateTime? @db.Timestamptz(3)
-
-  retryCount Int @default(0)
-  maxRetries Int @default(3)
-
-  lastRetryAt DateTime? @db.Timestamptz(3)
-  nextRetryAt DateTime? @db.Timestamptz(3)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  id          String          @id @default(cuid())
+  provider    PaymentProvider
+  eventId     String
+  eventType   String
+  payload     Json
+  processed   Boolean         @default(false)
+  processedAt DateTime?       @db.Timestamptz(3)
+  retryCount  Int             @default(0)
+  maxRetries  Int             @default(3)
+  lastRetryAt DateTime?       @db.Timestamptz(3)
+  nextRetryAt DateTime?       @db.Timestamptz(3)
+  createdAt   DateTime        @default(now()) @db.Timestamptz(3)
 
   @@unique([provider, eventId])
   @@index([provider])
@@ -890,22 +770,16 @@ model PaymentWebhookEvent {
 }
 
 model Notification {
-  id String @id @default(cuid())
-
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  title   String
-  message String
-
-  type NotificationType
-
-  isRead Boolean @default(false)
-
-  metadata Json?
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String
+  type      NotificationType
+  isRead    Boolean          @default(false)
+  metadata  Json?
+  createdAt DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime         @updatedAt @db.Timestamptz(3)
 
   @@index([userId, type, createdAt])
   @@index([userId, isRead, createdAt])
@@ -913,24 +787,18 @@ model Notification {
 }
 
 model AuditLog {
-  id String @id @default(cuid())
-
-  userId String?
-  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
-
-  action AuditAction
-
-  entity   String
-  entityId String?
-
-  oldValue Json?
-  newValue Json?
-  metadata Json?
-
+  id        String      @id @default(cuid())
+  userId    String?
+  user      User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    AuditAction
+  entity    String
+  entityId  String?
+  oldValue  Json?
+  newValue  Json?
+  metadata  Json?
   ipAddress String?
   userAgent String?
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  createdAt DateTime    @default(now()) @db.Timestamptz(3)
 
   @@index([userId])
   @@index([action])
@@ -940,16 +808,13 @@ model AuditLog {
 }
 
 model UserConsent {
-  id String @id @default(cuid())
-
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
+  id          String      @id @default(cuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   consentType ConsentType
   granted     Boolean     @default(true)
-
-  grantedAt DateTime  @default(now()) @db.Timestamptz(3)
-  revokedAt DateTime? @db.Timestamptz(3)
+  grantedAt   DateTime    @default(now()) @db.Timestamptz(3)
+  revokedAt   DateTime?   @db.Timestamptz(3)
 
   @@unique([userId, consentType])
   @@index([userId])
@@ -966,8 +831,7 @@ model IdempotencyKey {
   statusCode  Int
   expiresAt   DateTime @db.Timestamptz(3)
   createdAt   DateTime @default(now()) @db.Timestamptz(3)
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([key, userId])
   @@index([expiresAt])
@@ -976,29 +840,23 @@ model IdempotencyKey {
 }
 
 model BlogCategory {
-  id String @id @default(cuid())
-
-  name        String  @unique
-  slug        String  @unique
+  id          String     @id @default(cuid())
+  name        String     @unique
+  slug        String     @unique
   description String?
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-
-  posts BlogPost[]
+  createdAt   DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime   @updatedAt @db.Timestamptz(3)
+  posts       BlogPost[]
 
   @@map("blog_categories")
 }
 
 model BlogTag {
-  id String @id @default(cuid())
-
-  name String @unique
-  slug String @unique
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-
-  posts BlogPostTag[]
+  id        String        @id @default(cuid())
+  name      String        @unique
+  slug      String        @unique
+  createdAt DateTime      @default(now()) @db.Timestamptz(3)
+  posts     BlogPostTag[]
 
   @@map("blog_tags")
 }
@@ -1006,31 +864,23 @@ model BlogTag {
 // content is Markdown. A category can't be deleted while posts use it
 // (Restrict); an author can't be hard-deleted while they have posts.
 model BlogPost {
-  id String @id @default(cuid())
-
-  title   String
-  slug    String @unique
-  excerpt String
-  content String
-
-  coverImage String?
-
+  id                 String         @id @default(cuid())
+  title              String
+  slug               String         @unique
+  excerpt            String
+  content            String
+  coverImage         String?
   status             BlogPostStatus @default(DRAFT)
   readingTimeMinutes Int            @default(1)
   publishedAt        DateTime?      @db.Timestamptz(3)
-
-  authorId String
-  author   User   @relation("BlogPostAuthor", fields: [authorId], references: [id], onDelete: Restrict)
-
-  categoryId String
-  category   BlogCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-
-  tags BlogPostTag[]
-
-  deletedAt DateTime? @db.Timestamptz(3)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  authorId           String
+  author             User           @relation("BlogPostAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  categoryId         String
+  category           BlogCategory   @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  tags               BlogPostTag[]
+  deletedAt          DateTime?      @db.Timestamptz(3)
+  createdAt          DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime       @updatedAt @db.Timestamptz(3)
 
   @@index([status, publishedAt])
   @@index([categoryId, status, publishedAt])
@@ -1042,9 +892,8 @@ model BlogPost {
 model BlogPostTag {
   postId String
   post   BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
-
-  tagId String
-  tag   BlogTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  tagId  String
+  tag    BlogTag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
 
   @@id([postId, tagId])
   @@index([tagId])
@@ -1052,19 +901,59 @@ model BlogPostTag {
 }
 
 model ContactMessage {
-  id String @id @default(cuid())
-
-  name    String
-  email   String @db.VarChar(320)
-  subject String
-  message String
-
-  status ContactMessageStatus @default(NEW)
-  readAt DateTime?            @db.Timestamptz(3)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  id        String               @id @default(cuid())
+  name      String
+  email     String               @db.VarChar(320)
+  subject   String
+  message   String
+  status    ContactMessageStatus @default(NEW)
+  readAt    DateTime?            @db.Timestamptz(3)
+  createdAt DateTime             @default(now()) @db.Timestamptz(3)
 
   @@index([status, createdAt])
   @@index([createdAt])
   @@map("contact_messages")
+}
+
+model AutomationEvent {
+  id            String                @id @default(cuid())
+  eventType     String
+  aggregateType String
+  aggregateId   String
+  dedupeKey     String?               @unique
+  payload       Json
+  status        AutomationEventStatus @default(PENDING)
+  retryCount    Int                   @default(0)
+  maxRetries    Int                   @default(5)
+  lockedAt      DateTime?             @db.Timestamptz(3)
+  nextRetryAt   DateTime?             @db.Timestamptz(3)
+  lastError     String?
+  deliveredAt   DateTime?             @db.Timestamptz(3)
+  createdAt     DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime              @updatedAt @db.Timestamptz(3)
+
+  @@index([status, nextRetryAt])
+  @@index([aggregateType, aggregateId])
+  @@index([createdAt])
+  @@map("automation_events")
+}
+
+model AttemptReport {
+  id             String            @id @default(cuid())
+  attemptId      String            @unique
+  attempt        AssessmentAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  riskLevel      RiskLevel?
+  riskSummary    String?
+  summary        String?
+  strengths      Json?
+  weaknesses     Json?
+  recommendation String?
+  aiModel        String?
+  riskAnalyzedAt DateTime?         @db.Timestamptz(3)
+  generatedAt    DateTime?         @db.Timestamptz(3)
+  createdAt      DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime          @updatedAt @db.Timestamptz(3)
+
+  @@index([riskLevel])
+  @@map("attempt_reports")
 }
