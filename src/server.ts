@@ -3,6 +3,7 @@ import type { Server } from "node:http";
 import app from "./app";
 import config from "./app/config";
 import { prisma } from "./lib/prisma";
+import { startLocalDispatcher } from "./app/modules/automation/automation.local";
 
 const PORT = config.app.port;
 
@@ -15,6 +16,7 @@ async function main() {
 
 		server = app.listen(PORT, () => {
 			console.log(`🚀 Evalora server is running on port ${PORT}`);
+						startLocalDispatcher();
 		});
 	} catch (error) {
 		console.error("Error starting the server:", error);

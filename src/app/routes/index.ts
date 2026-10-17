@@ -15,6 +15,7 @@ import { resultRoutes } from "../modules/result/result.routes";
 import { userRoutes } from "../modules/user/user.routes";
 import { blogRoutes } from "../modules/blog/blog.routes";
 import { contactRoutes } from "../modules/contact/contact.routes";
+import { automationRoutes } from "../modules/automation/automation.routes";
 
 const router = Router();
 
@@ -35,6 +36,7 @@ const moduleRoutes = [
   { path: "/consents", route: consentRoutes },
   { path: "/blog", route: blogRoutes },
   { path: "/contact", route: contactRoutes },
+    { path: "/internal/automation", route: automationRoutes },
 ];
 
 for (const { path, route } of moduleRoutes) {
