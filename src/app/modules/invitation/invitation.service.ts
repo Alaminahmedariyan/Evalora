@@ -18,6 +18,8 @@ import { assertCompanyVerified } from "../../utils/assertCompanyVerified";
 import { escapeHtml } from "../../utils/escapeHtml";
 import { assertCanInvite } from "../../utils/planLimits";
 import { sendEmail } from "../../utils/sendEmail";
+import { AUTOMATION_EVENT_TYPES } from "../automation/automation.const";
+import { automationService } from "../automation/automation.service";
 
 import { INVITATION_SELECT } from "./invitation.const";
 import type { InviteCandidatesInput } from "./invitation.interface";
@@ -182,7 +184,7 @@ const inviteCandidates = async (
 
 	await assertCanInvite(companyId, emailsToInvite.length);
 
-	// Only auto-link to CANDIDATE accounts — an email that happens to match
+	// Only auto-link to CANDIDATE accounts - an email that happens to match
 	// a recruiter/admin shouldn't silently become "invited as a candidate".
 	const matchingCandidates = await prisma.user.findMany({
 		where: {
@@ -216,6 +218,25 @@ const inviteCandidates = async (
 		),
 	);
 
+	// Best-effort: the automation workflow handles reminders and expiry from
+	// these events. The payload has no email address on purpose.
+	await Promise.allSettled(
+		created.map((invitation) =>
+			automationService.emitEvent({
+				eventType: AUTOMATION_EVENT_TYPES.INVITATION_CREATED,
+				aggregateType: "AssessmentInvitation",
+				aggregateId: invitation.id,
+				dedupeKey: `${AUTOMATION_EVENT_TYPES.INVITATION_CREATED}:${invitation.id}`,
+				payload: {
+					invitationId: invitation.id,
+					assessmentId: invitation.assessmentId,
+					assessmentTitle: assessment.title,
+					expiresAt: expiresAt.toISOString(),
+				},
+			}),
+		),
+	);
+
 	// In-app notification for every invited candidate who already has an
 	// account. Best-effort, like the emails below.
 	await notifyInvitedCandidates(
@@ -233,7 +254,7 @@ const inviteCandidates = async (
 		),
 	);
 
-	// Best-effort — a failed email send shouldn't roll back invitations that
+	// Best-effort - a failed email send shouldn't roll back invitations that
 	// were already committed to the database.
 	await Promise.allSettled(
 		created.map((invitation) =>
@@ -278,7 +299,7 @@ const getInvitationsForAssessment = async (
 
 /**
  * Also opportunistically links any invitations sent to this email before
- * the candidate registered — so a candidate who was invited by email,
+ * the candidate registered - so a candidate who was invited by email,
  * then signed up afterward, still sees the invitation under "my
  * invitations" without the recruiter needing to re-invite them. The
  * candidate is notified at the moment of linking, since that is the first
@@ -445,7 +466,7 @@ const declineInvitation = async (id: string, userId: string, email: string) => {
 
 /**
  * Hard-deletes a still-PENDING invitation. This is safe because
- * `AssessmentAttempt.invitationId` is `onDelete: SetNull` — and a PENDING
+ * `AssessmentAttempt.invitationId` is `onDelete: SetNull` - and a PENDING
  * invitation (never accepted) can't have an attempt pointing at it anyway.
  * AssessmentInvitation has no `deletedAt` column, so "cancel" genuinely
  * means delete here, not a soft-delete.

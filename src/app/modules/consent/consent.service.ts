@@ -1,10 +1,17 @@
 import { StatusCodes } from "http-status-codes";
 
+import type { ConsentType } from "../../../generated/prisma/enums";
+
 import { prisma } from "../../../lib/prisma";
 import AppError from "../../errors/appError";
 
-import { CONSENT_SELECT } from "./consent.const";
+import { CONSENT_SELECT, CONSENT_TYPE_LABELS } from "./consent.const";
 import type { ConsentResponse, UpdateConsentInput } from "./consent.interface";
+
+const ALL_CONSENT_TYPES = Object.keys(CONSENT_TYPE_LABELS) as ConsentType[];
+
+const isConsentType = (value: string): value is ConsentType =>
+	(ALL_CONSENT_TYPES as string[]).includes(value);
 
 const getMyConsents = async (userId: string) => {
 	const consents = await prisma.userConsent.findMany({
@@ -13,15 +20,7 @@ const getMyConsents = async (userId: string) => {
 		orderBy: { grantedAt: "desc" },
 	});
 
-	const allTypes = [
-		"MARKETING",
-		"ANALYTICS",
-		"THIRD_PARTY",
-		"PRIVACY_POLICY",
-		"TERMS_OF_SERVICE",
-	] as const;
-
-	const result: ConsentResponse[] = allTypes.map((type) => {
+	const result: ConsentResponse[] = ALL_CONSENT_TYPES.map((type) => {
 		const existing = consents.find((c) => c.consentType === type);
 		if (existing) {
 			return existing as ConsentResponse;
@@ -78,8 +77,12 @@ const updateConsent = async (userId: string, payload: UpdateConsentInput) => {
 };
 
 const revokeConsent = async (userId: string, consentType: string) => {
+	if (!isConsentType(consentType)) {
+		throw new AppError(StatusCodes.BAD_REQUEST, "Unknown consent type.");
+	}
+
 	const existing = await prisma.userConsent.findUnique({
-		where: { userId_consentType: { userId, consentType: consentType as any } },
+		where: { userId_consentType: { userId, consentType } },
 	});
 
 	if (!existing) {
@@ -94,7 +97,7 @@ const revokeConsent = async (userId: string, consentType: string) => {
 	}
 
 	return prisma.userConsent.update({
-		where: { userId_consentType: { userId, consentType: consentType as any } },
+		where: { userId_consentType: { userId, consentType } },
 		data: { granted: false, revokedAt: new Date() },
 		select: CONSENT_SELECT,
 	});

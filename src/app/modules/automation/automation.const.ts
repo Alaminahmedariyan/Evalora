@@ -9,4 +9,8 @@ export const AUTOMATION_DISPATCH = {
 
 export const AUTOMATION_EVENT_TYPES = {
 	SYSTEM_TEST: "system.test",
+	ATTEMPT_SUBMITTED: "attempt.submitted",
+	ATTEMPT_AUTO_SUBMITTED: "attempt.auto_submitted",
+	INVITATION_CREATED: "invitation.created",
+	SUBMISSION_NEEDS_AI_EVALUATION: "submission.needs_ai_evaluation",
 } as const;

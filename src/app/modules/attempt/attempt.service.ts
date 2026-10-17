@@ -5,6 +5,8 @@ import type { UserRole } from "../../../generated/prisma/enums";
 
 import { prisma } from "../../../lib/prisma";
 import AppError from "../../errors/appError";
+import { AUTOMATION_EVENT_TYPES } from "../automation/automation.const";
+import { automationService } from "../automation/automation.service";
 
 import { ATTEMPT_DETAIL_SELECT } from "./attempt.const";
 import type {
@@ -18,7 +20,7 @@ import { gradeSubmissionForProblem, recomputeResult } from "./grading.util";
  * AUTO_SUBMITTED if called because time already ran out), grades every
  * problem in the assessment, recomputes the Result, and marks the backing
  * invitation COMPLETED. Shared by an explicit submit and every lazy
- * expiry check throughout this file — there is exactly one code path that
+ * expiry check throughout this file - there is exactly one code path that
  * closes out an attempt, so grading can never accidentally run twice with
  * different outcomes.
  */
@@ -36,7 +38,7 @@ const finalizeAttempt = async (attemptId: string) => {
 		},
 	});
 
-	if (attempt.status !== "IN_PROGRESS") return; // already finalized — nothing to do.
+	if (attempt.status !== "IN_PROGRESS") return; // already finalized - nothing to do.
 
 	const isLate = attempt.expiresAt < new Date();
 
@@ -66,6 +68,30 @@ const finalizeAttempt = async (attemptId: string) => {
 			data: { status: "COMPLETED", completedAt: new Date() },
 		});
 	}
+
+	// Best-effort: a failed enqueue must never undo a finalized attempt.
+	try {
+		const eventType = isLate
+			? AUTOMATION_EVENT_TYPES.ATTEMPT_AUTO_SUBMITTED
+			: AUTOMATION_EVENT_TYPES.ATTEMPT_SUBMITTED;
+
+		await automationService.emitEvent({
+			eventType,
+			aggregateType: "AssessmentAttempt",
+			aggregateId: attemptId,
+			dedupeKey: `${eventType}:${attemptId}`,
+			payload: {
+				attemptId,
+				assessmentId: attempt.assessmentId,
+				candidateId: attempt.candidateId,
+				attemptNumber: attempt.attemptNumber,
+				isLate,
+				finalizedAt: new Date().toISOString(),
+			},
+		});
+	} catch (error) {
+		console.error("Failed to emit attempt finalized event", error);
+	}
 };
 
 const getAttemptById = async (
@@ -91,7 +117,7 @@ const getAttemptById = async (
 		throw new AppError(StatusCodes.NOT_FOUND, "Attempt not found.");
 	}
 
-	// Lazy auto-expire — catches attempts nobody explicitly submitted in time.
+	// Lazy auto-expire - catches attempts nobody explicitly submitted in time.
 	if (attempt.status === "IN_PROGRESS" && attempt.expiresAt < new Date()) {
 		await finalizeAttempt(id);
 		attempt = await prisma.assessmentAttempt.findUniqueOrThrow({
@@ -171,7 +197,7 @@ const startAttempt = async (candidateId: string, assessmentId: string) => {
 				role: "CANDIDATE",
 			});
 		}
-		// Stale — finalize it before allowing a fresh attempt.
+		// Stale - finalize it before allowing a fresh attempt.
 		await finalizeAttempt(inProgress.id);
 	}
 
@@ -208,7 +234,7 @@ const startAttempt = async (candidateId: string, assessmentId: string) => {
 
 /**
  * Saves (creates or overwrites) the candidate's answer for one problem.
- * Can be called repeatedly while the attempt is IN_PROGRESS — each call
+ * Can be called repeatedly while the attempt is IN_PROGRESS - each call
  * fully replaces the previous answer for that problem. An empty answer
  * (nothing selected, blank code, blank text) removes the stored submission,
  * so a cleared answer is treated exactly like one never given.
@@ -241,14 +267,14 @@ const saveSubmission = async (
 		await finalizeAttempt(attemptId);
 		throw new AppError(
 			StatusCodes.GONE,
-			"Time is up — this attempt has been auto-submitted.",
+			"Time is up - this attempt has been auto-submitted.",
 		);
 	}
 
 	if (attempt.status !== "IN_PROGRESS") {
 		throw new AppError(
 			StatusCodes.CONFLICT,
-			`Cannot modify answers — this attempt is already ${attempt.status.toLowerCase()}.`,
+			`Cannot modify answers - this attempt is already ${attempt.status.toLowerCase()}.`,
 		);
 	}
 
@@ -302,7 +328,7 @@ const saveSubmission = async (
 			) {
 				throw new AppError(
 					StatusCodes.BAD_REQUEST,
-					"This is a single-choice question — select only one option.",
+					"This is a single-choice question - select only one option.",
 				);
 			}
 		}
@@ -402,7 +428,7 @@ const submitAttempt = async (attemptId: string, candidateId: string) => {
 
 /**
  * A stale beacon from a tab that's already closed (e.g. a tab-switch event
- * firing right as time runs out) is not an error — it's just a no-op once
+ * firing right as time runs out) is not an error - it's just a no-op once
  * the attempt is no longer IN_PROGRESS.
  */
 const recordProctoringEvent = async (

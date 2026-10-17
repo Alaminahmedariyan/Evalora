@@ -1,6 +1,8 @@
 import type { ProblemType } from "../../../generated/prisma/enums";
 
 import { prisma } from "../../../lib/prisma";
+import { AUTOMATION_EVENT_TYPES } from "../automation/automation.const";
+import { automationService } from "../automation/automation.service";
 import { isResultReleasedToCandidate } from "../result/result.access";
 
 /**
@@ -17,8 +19,11 @@ import { isResultReleasedToCandidate } from "../result/result.access";
  *   set against the correct option set. COMPLETED immediately.
  * - CODING/WRITTEN with a real answer -> left PENDING for a recruiter to
  *   grade manually (see evaluation.service.ts). This project intentionally
- *   does not execute candidate-submitted code — see the design note in
+ *   does not execute candidate-submitted code - see the design note in
  *   attempt.interface.ts / the module's opening explanation.
+ * - WRITTEN additionally emits a submission.needs_ai_evaluation event so
+ *   the automation workflow can suggest a score. The AI result is only a
+ *   suggestion; the recruiter's grade is always the final one.
  */
 export const gradeSubmissionForProblem = async (params: {
   attemptId: string;
@@ -110,7 +115,7 @@ export const gradeSubmissionForProblem = async (params: {
     return;
   }
 
-  // CODING / WRITTEN with a real answer — needs a human. Submission moves
+  // CODING / WRITTEN with a real answer - needs a human. Submission moves
   // to EVALUATING (not EVALUATED) until a recruiter grades it.
   await prisma.submission.update({
     where: { id: submission.id },
@@ -132,11 +137,32 @@ export const gradeSubmissionForProblem = async (params: {
       isAutoEvaluated: false,
     },
   });
+
+  if (problemType === "WRITTEN") {
+    // Best-effort: a failed enqueue must never block finalizing the attempt.
+    // The payload carries IDs only; the workflow fetches the answer itself.
+    try {
+      await automationService.emitEvent({
+        eventType: AUTOMATION_EVENT_TYPES.SUBMISSION_NEEDS_AI_EVALUATION,
+        aggregateType: "Submission",
+        aggregateId: submission.id,
+        dedupeKey: `${AUTOMATION_EVENT_TYPES.SUBMISSION_NEEDS_AI_EVALUATION}:${submission.id}`,
+        payload: {
+          submissionId: submission.id,
+          attemptId,
+          problemId,
+          maxScore: marks,
+        },
+      });
+    } catch (error) {
+      console.error("Failed to emit AI evaluation event", error);
+    }
+  }
 };
 
 /**
  * Recomputes and upserts the attempt's Result row from its current
- * submissions/evaluations. Safe to call multiple times — once right after
+ * submissions/evaluations. Safe to call multiple times - once right after
  * an attempt is finalized (some evaluations may still be PENDING), and
  * again after each manual grade (evaluation.service.ts), until every
  * evaluation is COMPLETED and the Result can carry a final PASSED/FAILED

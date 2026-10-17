@@ -1,14 +1,13 @@
 import { z } from "zod";
 
-import type { ConsentType } from "../../../generated/prisma/enums";
+import { CONSENT_TYPE_LABELS } from "./consent.const";
 
-export const consentTypeSchema = z.enum([
-	"MARKETING",
-	"ANALYTICS",
-	"THIRD_PARTY",
-	"PRIVACY_POLICY",
-	"TERMS_OF_SERVICE",
-]);
+const consentTypes = Object.keys(CONSENT_TYPE_LABELS) as [
+	keyof typeof CONSENT_TYPE_LABELS,
+	...(keyof typeof CONSENT_TYPE_LABELS)[],
+];
+
+export const consentTypeSchema = z.enum(consentTypes);
 
 export const updateConsentSchema = z.object({
 	consentType: consentTypeSchema,
