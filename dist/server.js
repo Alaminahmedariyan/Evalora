@@ -58,7 +58,8 @@ var envSchema = z.object({
   N8N_WEBHOOK_SECRET: z.string().min(32).optional(),
   N8N_API_KEY: z.string().min(32).optional(),
   AUTOMATION_LOCAL_DISPATCHER: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
-  GEMINI_API_KEY: z.string().min(20).optional()
+  GEMINI_API_KEY: z.string().min(20).optional(),
+  DEMO_MODE_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true")
 });
 var parsed = envSchema.safeParse(process.env);
 if (!parsed.success) {
@@ -141,48 +142,131 @@ var config = {
   },
   gemini: {
     apiKey: env.GEMINI_API_KEY
+  },
+  demo: {
+    enabled: env.DEMO_MODE_ENABLED
   }
 };
 var config_default = config;
 
-// src/app/middlewares/forceHttps.ts
-var forceHttps = (req, res, next) => {
-  const isSecure = req.secure || req.headers["x-forwarded-proto"] === "https";
-  if (!isSecure) {
-    return res.redirect(301, `https://${req.headers.host}${req.originalUrl}`);
-  }
-  next();
-};
-
-// src/app/middlewares/globalErrorHandler.ts
-import { StatusCodes as StatusCodes3 } from "http-status-codes";
-import { ZodError } from "zod";
-import multer from "multer";
-
-// src/app/errors/appError.ts
-var AppError = class extends Error {
-  statusCode;
-  errorCode;
-  details;
-  isOperational;
-  constructor(statusCode, message, errorCode, details) {
-    super(message);
-    this.name = this.constructor.name;
-    this.statusCode = statusCode;
-    this.isOperational = true;
-    if (errorCode !== void 0) {
-      this.errorCode = errorCode;
-    }
-    if (details !== void 0) {
-      this.details = details;
-    }
-    Error.captureStackTrace?.(this, this.constructor);
-  }
-};
-var appError_default = AppError;
-
-// src/app/errors/handlePrismaError.ts
+// src/app/middlewares/demoGuard.ts
+import { fromNodeHeaders } from "better-auth/node";
 import { StatusCodes } from "http-status-codes";
+
+// src/lib/auth.ts
+import { betterAuth } from "better-auth";
+import { prismaAdapter } from "better-auth/adapters/prisma";
+import { APIError, createAuthMiddleware } from "better-auth/api";
+import { bearer, emailOTP, twoFactor } from "better-auth/plugins";
+
+// src/lib/radis.ts
+import Redis from "ioredis";
+var redis = config_default.app.env !== "production" || !config_default.redis.url ? new Redis({ enableReadyCheck: false, maxRetriesPerRequest: 0 }) : new Redis(config_default.redis.url, {
+  enableReadyCheck: false,
+  maxRetriesPerRequest: 3
+});
+if (config_default.app.env === "production") {
+  redis.on("error", (error) => {
+    console.error("[Redis] Connection error:", error.message);
+  });
+}
+
+// src/app/utils/bruteForceGuard.ts
+var MAX_ATTEMPTS = 5;
+var LOCKOUT_SECONDS = 15 * 60;
+var ATTEMPT_WINDOW_SECONDS = 15 * 60;
+var attemptsKey = (identifier) => `login:attempts:${identifier}`;
+var lockKey = (identifier) => `login:locked:${identifier}`;
+var isLocked = async (identifier) => {
+  if (config_default.app.env !== "production") {
+    return false;
+  }
+  try {
+    const locked = await redis.get(lockKey(identifier));
+    return Boolean(locked);
+  } catch {
+    return false;
+  }
+};
+var recordFailedAttempt = async (identifier) => {
+  if (config_default.app.env !== "production") {
+    return;
+  }
+  try {
+    const key = attemptsKey(identifier);
+    const attempts = await redis.incr(key);
+    if (attempts === 1) {
+      await redis.expire(key, ATTEMPT_WINDOW_SECONDS);
+    }
+    if (attempts >= MAX_ATTEMPTS) {
+      await redis.set(lockKey(identifier), "1", "EX", LOCKOUT_SECONDS);
+      await redis.del(key);
+    }
+  } catch {
+  }
+};
+var clearFailedAttempts = async (identifier) => {
+  if (config_default.app.env !== "production") {
+    return;
+  }
+  try {
+    await redis.del(attemptsKey(identifier));
+  } catch {
+  }
+};
+
+// src/app/utils/escapeHtml.ts
+var ENTITIES = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;"
+};
+var escapeHtml = (value) => value.replace(/[&<>"']/g, (char) => ENTITIES[char] ?? char);
+
+// src/app/utils/emailTemplates.ts
+var welcomeEmailTemplate = (name) => `
+  <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; color: #111;">
+    <h2>Welcome, ${escapeHtml(name)}!</h2>
+    <p>Thanks for joining. Your account has been created successfully.</p>
+  </div>
+`;
+var otpEmailTemplate = (name, otp, expirationMinutes, purpose = "verify your email") => `
+  <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; color: #111;">
+    <h2>Verification Code</h2>
+    <p>Hi ${escapeHtml(name)}, use the code below to ${escapeHtml(purpose)}.</p>
+    <div style="display:inline-block;padding:12px 24px;background:#f0f4ff;color:#007bff;font-size:28px;font-weight:bold;letter-spacing:8px;border-radius:4px;margin-top:20px;">${escapeHtml(otp)}</div>
+    <p style="font-size: 13px; color: #666; margin-top: 16px;">This code will expire in ${expirationMinutes} minutes. If you didn't request this, please ignore this email.</p>
+  </div>
+`;
+
+// src/lib/nodemailer.ts
+import nodemailer from "nodemailer";
+var transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: config_default.email.smtpUser,
+    pass: config_default.email.smtpPassword
+  }
+});
+
+// src/app/utils/sendEmailSmtp.ts
+var sendEmailSmtp = async ({ to, subject, html }) => {
+  try {
+    await transporter.sendMail({
+      from: config_default.email.smtpUser,
+      to,
+      subject,
+      html
+    });
+  } catch (error) {
+    console.error("[Email] Failed to send email via SMTP:", error);
+  }
+};
+
+// src/lib/prisma.ts
+import { PrismaPg } from "@prisma/adapter-pg";
 
 // src/generated/prisma/client.ts
 import "process";
@@ -1790,1409 +1874,13 @@ var defineExtension = runtime2.Extensions.defineExtension;
 globalThis["__dirname"] = path.dirname(fileURLToPath(import.meta.url));
 var PrismaClient = getPrismaClientClass();
 
-// src/app/errors/handlePrismaError.ts
-var handlePrismaError = (error) => {
-  if (error instanceof prismaNamespace_exports.PrismaClientValidationError) {
-    return {
-      statusCode: StatusCodes.BAD_REQUEST,
-      message: "Invalid request data.",
-      errorCode: "PRISMA_VALIDATION_ERROR"
-    };
-  }
-  if (error instanceof prismaNamespace_exports.PrismaClientKnownRequestError) {
-    switch (error.code) {
-      case "P2002":
-        return {
-          statusCode: StatusCodes.CONFLICT,
-          message: "Resource already exists.",
-          errorCode: error.code
-        };
-      case "P2003":
-        return {
-          statusCode: StatusCodes.BAD_REQUEST,
-          message: "Foreign key constraint failed.",
-          errorCode: error.code
-        };
-      case "P2025":
-        return {
-          statusCode: StatusCodes.NOT_FOUND,
-          message: "Resource not found.",
-          errorCode: error.code
-        };
-      default:
-        return {
-          statusCode: StatusCodes.BAD_REQUEST,
-          message: "Database request failed.",
-          errorCode: error.code
-        };
-    }
-  }
-  if (error instanceof prismaNamespace_exports.PrismaClientInitializationError) {
-    if (error.errorCode === "P1000") {
-      return {
-        statusCode: StatusCodes.UNAUTHORIZED,
-        message: "Database authentication failed.",
-        errorCode: "P1000"
-      };
-    }
-    if (error.errorCode === "P1001") {
-      return {
-        statusCode: StatusCodes.SERVICE_UNAVAILABLE,
-        message: "Can't reach database server.",
-        errorCode: "P1001"
-      };
-    }
-    return {
-      statusCode: StatusCodes.SERVICE_UNAVAILABLE,
-      message: "Database connection failed.",
-      errorCode: error.errorCode ?? "PRISMA_INIT_ERROR"
-    };
-  }
-  if (error instanceof prismaNamespace_exports.PrismaClientUnknownRequestError) {
-    return {
-      statusCode: StatusCodes.INTERNAL_SERVER_ERROR,
-      message: "Database query failed.",
-      errorCode: "PRISMA_UNKNOWN_ERROR"
-    };
-  }
-  return null;
-};
-
-// src/app/errors/handleZodError.ts
-import { StatusCodes as StatusCodes2 } from "http-status-codes";
-var handleZodError = (error) => {
-  return {
-    statusCode: StatusCodes2.BAD_REQUEST,
-    message: "Validation failed",
-    details: error.issues.map((issue) => ({
-      field: issue.path.join("."),
-      message: issue.message
-    }))
-  };
-};
-
-// src/app/middlewares/globalErrorHandler.ts
-var globalErrorHandler = (error, _req, res, _next) => {
-  let statusCode = StatusCodes3.INTERNAL_SERVER_ERROR;
-  let message = "Something went wrong";
-  let errorCode;
-  let errors = [];
-  if (error instanceof appError_default) {
-    statusCode = error.statusCode;
-    message = error.message;
-    errorCode = error.errorCode;
-    errors = Array.isArray(error.details) ? error.details : error.details !== void 0 ? [error.details] : [];
-  } else if (error instanceof ZodError) {
-    const zodError = handleZodError(error);
-    statusCode = zodError.statusCode;
-    message = zodError.message;
-    errors = zodError.details;
-  } else if (error instanceof ZodError) {
-    const zodError = handleZodError(error);
-    statusCode = zodError.statusCode;
-    message = zodError.message;
-    errors = zodError.details;
-  } else if (error instanceof multer.MulterError) {
-    const tooLarge = error.code === "LIMIT_FILE_SIZE";
-    statusCode = tooLarge ? StatusCodes3.REQUEST_TOO_LONG : StatusCodes3.BAD_REQUEST;
-    message = tooLarge ? "The uploaded file is too large." : error.message;
-  } else {
-    const prismaError = handlePrismaError(error);
-    if (prismaError) {
-      statusCode = prismaError.statusCode;
-      message = prismaError.message;
-      errorCode = prismaError.errorCode;
-    } else if (error instanceof Error) {
-      message = error.message;
-    }
-  }
-  const response = { success: false, message, errors };
-  if (errorCode) response.errorCode = errorCode;
-  if (config_default.app.env === "development") {
-    response.stack = error instanceof Error ? error.stack : void 0;
-  }
-  res.status(statusCode).json(response);
-};
-
-// src/app/middlewares/notFound.ts
-import { StatusCodes as StatusCodes4 } from "http-status-codes";
-var notFound = (req, res) => {
-  res.status(StatusCodes4.NOT_FOUND).json({
-    success: false,
-    message: "Route not found.",
-    errors: [{ path: req.originalUrl }]
-  });
-};
-
-// src/app/middlewares/rateLimiters.ts
-import { timingSafeEqual } from "crypto";
-import rateLimit, { ipKeyGenerator } from "express-rate-limit";
-import { StatusCodes as StatusCodes5 } from "http-status-codes";
-
-// src/lib/radis.ts
-import Redis from "ioredis";
-var redis = config_default.app.env !== "production" || !config_default.redis.url ? new Redis({ enableReadyCheck: false, maxRetriesPerRequest: 0 }) : new Redis(config_default.redis.url, {
-  enableReadyCheck: false,
-  maxRetriesPerRequest: 3
-});
-if (config_default.app.env === "production") {
-  redis.on("error", (error) => {
-    console.error("[Redis] Connection error:", error.message);
-  });
-}
-
-// src/app/middlewares/rate-limit-store.ts
-var PREFIX = "ratelimit";
-var INCR_WITH_TTL_LUA = `
-local hits = redis.call('INCR', KEYS[1])
-if hits == 1 then
-  redis.call('EXPIRE', KEYS[1], ARGV[1])
-end
-return hits
-`;
-var RedisStore = class {
-  prefix = PREFIX;
-  windowMs;
-  storeName;
-  /**
-   * @param windowMs - the rate-limit window in milliseconds; converted to
-   *   seconds for Redis EXPIRE.
-   * @param storeName - short identifier used in the Redis key prefix so
-   *   different limiters don't share counters.
-   */
-  constructor(windowMs, storeName) {
-    this.windowMs = windowMs;
-    this.storeName = storeName;
-  }
-  /** No-op init — the client is constructed eagerly in radis.ts. */
-  init(_options) {
-  }
-  async increment(key) {
-    const fullKey = `${this.prefix}:${this.storeName}:${key}`;
-    const ttlSeconds = Math.max(1, Math.ceil(this.windowMs / 1e3));
-    try {
-      let hits;
-      const maybeEval = redis.eval;
-      if (typeof maybeEval === "function") {
-        hits = await redis.eval(INCR_WITH_TTL_LUA, 1, fullKey, ttlSeconds);
-      } else {
-        hits = await redis.incr(fullKey);
-        if (hits === 1) {
-          await redis.expire(fullKey, ttlSeconds);
-        }
-      }
-      const resetTime = new Date(Date.now() + ttlSeconds * 1e3);
-      return { totalHits: hits, resetTime };
-    } catch (error) {
-      console.warn("[RedisStore] increment failed; failing open:", error);
-      return { totalHits: 0, resetTime: void 0 };
-    }
-  }
-  async decrement(key) {
-    const fullKey = `${this.prefix}:${this.storeName}:${key}`;
-    try {
-      const maybeDecr = redis.decr;
-      if (typeof maybeDecr === "function") {
-        await redis.decr(fullKey);
-      }
-    } catch (error) {
-      console.warn("[RedisStore] decrement failed; failing open:", error);
-    }
-  }
-  async resetKey(key) {
-    const fullKey = `${this.prefix}:${this.storeName}:${key}`;
-    try {
-      await redis.del(fullKey);
-    } catch (error) {
-      console.warn("[RedisStore] resetKey failed; failing open:", error);
-    }
-  }
-  async resetAll() {
-    try {
-      const pattern = `${this.prefix}:*`;
-      const scan = redis.scan;
-      if (typeof scan === "function") {
-        let cursor = "0";
-        do {
-          const [nextCursor, keys] = await scan(pattern);
-          cursor = nextCursor;
-          if (keys.length > 0) {
-            await redis.del(...keys);
-          }
-        } while (cursor !== "0");
-      }
-    } catch (error) {
-      console.warn("[RedisStore] resetAll failed; failing open:", error);
-    }
-  }
-  async get(key) {
-    const fullKey = `${this.prefix}:${this.storeName}:${key}`;
-    try {
-      const raw3 = await redis.get(fullKey);
-      if (raw3 === null || raw3 === void 0) {
-        return void 0;
-      }
-      const totalHits = Number.parseInt(raw3, 10);
-      const maybePttl = redis.pttl;
-      let resetTime;
-      if (typeof maybePttl === "function") {
-        const ttlMs = await redis.pttl(fullKey);
-        if (Number.isFinite(ttlMs) && ttlMs > 0) {
-          resetTime = new Date(Date.now() + ttlMs);
-        }
-      }
-      return { totalHits: Number.isNaN(totalHits) ? 0 : totalHits, resetTime };
-    } catch (error) {
-      console.warn("[RedisStore] get failed; failing open:", error);
-      return void 0;
-    }
-  }
-  async shutdown() {
-  }
-};
-
-// src/app/middlewares/rateLimiters.ts
-var makeLimiter = (windowMs, baseLimit, message, store, keyType = "ip", skip = () => false) => {
-  const limitFn = (_req, _res) => {
-    if (process.env.NODE_ENV === "test") {
-      const raw3 = Number.parseFloat(
-        process.env.RATE_LIMIT_TEST_MULTIPLIER ?? "100"
-      );
-      if (Number.isFinite(raw3) && raw3 > 0) {
-        return Math.max(1, Math.floor(baseLimit * raw3));
-      }
-    }
-    return baseLimit;
-  };
-  return rateLimit({
-    windowMs,
-    limit: limitFn,
-    standardHeaders: true,
-    legacyHeaders: false,
-    store,
-    skip: (req) => skip(req),
-    passOnStoreError: true,
-    message: {
-      success: false,
-      statusCode: StatusCodes5.TOO_MANY_REQUESTS,
-      message
-    },
-    keyGenerator: (req) => {
-      if (keyType === "user" && req.user?.id) {
-        return req.user.id;
-      }
-      return ipKeyGenerator(req.ip ?? "unknown");
-    }
-  });
-};
-var isInternalRequest = (req) => {
-  const secret = process.env.INTERNAL_API_SECRET;
-  const header = req.headers["x-internal-secret"];
-  if (!secret || typeof header !== "string") return false;
-  const received = Buffer.from(header);
-  const expected = Buffer.from(secret);
-  return received.length === expected.length && timingSafeEqual(received, expected);
-};
-var generalRateLimiter = makeLimiter(
-  15 * 60 * 1e3,
-  300,
-  "Too many requests. Please try again later.",
-  new RedisStore(15 * 60 * 1e3, "general"),
-  "ip",
-  isInternalRequest
-);
-var authRateLimiter = makeLimiter(
-  15 * 60 * 1e3,
-  10,
-  "Too many login attempts. Please try again in 15 minutes.",
-  new RedisStore(15 * 60 * 1e3, "auth")
-);
-var publicRateLimiter = makeLimiter(
-  15 * 60 * 1e3,
-  20,
-  "Too many requests. Please try again later.",
-  new RedisStore(15 * 60 * 1e3, "public")
-);
-var invitationAcceptLimiter = makeLimiter(
-  6e4,
-  10,
-  "Too many invitation actions. Please try again shortly.",
-  new RedisStore(6e4, "invitation"),
-  "ip"
-);
-var attemptSubmitLimiter = makeLimiter(
-  6e4,
-  5,
-  "Too many submission attempts. Please try again shortly.",
-  new RedisStore(6e4, "attempt-submit"),
-  "user"
-);
-var submissionAnswerLimiter = makeLimiter(
-  6e4,
-  60,
-  "Too many answer submissions. Please try again shortly.",
-  new RedisStore(6e4, "submission-answer"),
-  "user"
-);
-var paymentCheckoutLimiter = makeLimiter(
-  6e4,
-  5,
-  "Too many checkout attempts. Please try again shortly.",
-  new RedisStore(6e4, "payment-checkout"),
-  "user"
-);
-var contactLimiter = makeLimiter(
-  60 * 60 * 1e3,
-  5,
-  "Too many messages from this connection. Please try again later.",
-  new RedisStore(60 * 60 * 1e3, "contact"),
-  "ip"
-);
-var accountActionLimiter = makeLimiter(
-  60 * 60 * 1e3,
-  10,
-  "Too many account requests. Please try again later.",
-  new RedisStore(60 * 60 * 1e3, "account-action"),
-  "user"
-);
-var proctoringEventLimiter = makeLimiter(
-  6e4,
-  120,
-  "Too many proctoring events. Please slow down.",
-  new RedisStore(6e4, "proctoring-event"),
-  "user"
-);
-var twoFactorLimiter = makeLimiter(
-  15 * 60 * 1e3,
-  20,
-  "Too many verification attempts. Please try again in 15 minutes.",
-  new RedisStore(15 * 60 * 1e3, "two-factor"),
-  "ip"
-);
-
-// src/app/middlewares/sanitizeBody.ts
-var UNSAFE_KEYS = ["__proto__", "constructor", "prototype"];
-var stripUnsafeKeys = (value) => {
-  if (Array.isArray(value)) return value.map(stripUnsafeKeys);
-  if (value !== null && typeof value === "object") {
-    const clean = {};
-    for (const [key, val] of Object.entries(value)) {
-      if (UNSAFE_KEYS.includes(key)) continue;
-      clean[key] = stripUnsafeKeys(val);
-    }
-    return clean;
-  }
-  return value;
-};
-var sanitizeBody = (req, _res, next) => {
-  if (req.body && typeof req.body === "object") {
-    req.body = stripUnsafeKeys(req.body);
-  }
-  next();
-};
-
-// src/app/modules/webhook/webhook.routes.ts
-import express, { Router } from "express";
-
-// src/app/modules/webhook/webhook.controller.ts
-import { StatusCodes as StatusCodes8 } from "http-status-codes";
-
-// src/app/utils/catchAsync.ts
-var catchAsync = (fn) => {
-  return async (req, res, next) => {
-    try {
-      await fn(req, res, next);
-    } catch (error) {
-      next(error);
-    }
-  };
-};
-
-// src/app/modules/payment/payment.service.ts
-import { StatusCodes as StatusCodes7 } from "http-status-codes";
-
 // src/lib/prisma.ts
-import { PrismaPg } from "@prisma/adapter-pg";
 var adapter = new PrismaPg({ connectionString: config_default.database.url });
 var globalForPrisma = global;
 var prisma = globalForPrisma.prisma || new PrismaClient({ adapter });
 if (config_default.app.env !== "production") {
   globalForPrisma.prisma = prisma;
 }
-
-// src/lib/stripe.ts
-import Stripe from "stripe";
-var stripe = config_default.stripe.secretKey ? new Stripe(config_default.stripe.secretKey) : null;
-var getStripe = () => {
-  if (!stripe) {
-    throw new Error(
-      "Stripe is not configured. Set STRIPE_SECRET_KEY in your .env file."
-    );
-  }
-  return stripe;
-};
-
-// src/app/queryBuilder/constants.ts
-var DEFAULT_PAGE = 1;
-var DEFAULT_LIMIT = 10;
-var DEFAULT_MAX_LIMIT = 100;
-var DEFAULT_SORT_FIELD = "createdAt";
-var DEFAULT_MAX_INCLUDE = 5;
-var DEFAULT_MAX_NESTED_DEPTH = 2;
-var DEFAULT_MAX_SEARCH_LENGTH = 150;
-var RESERVED_QUERY_KEYS = [
-  "page",
-  "limit",
-  "search",
-  "sortBy",
-  "sortOrder",
-  "sort",
-  "fields",
-  "include"
-];
-var OPERATOR_MAP = {
-  eq: "equals",
-  not: "not",
-  gt: "gt",
-  gte: "gte",
-  lt: "lt",
-  lte: "lte",
-  in: "in",
-  notIn: "notIn",
-  contains: "contains",
-  startsWith: "startsWith",
-  endsWith: "endsWith"
-};
-var VALID_OPERATORS = Object.keys(OPERATOR_MAP);
-var OPERATORS_BY_TYPE = {
-  string: ["eq", "not", "in", "notIn", "contains", "startsWith", "endsWith"],
-  number: ["eq", "not", "gt", "gte", "lt", "lte", "in", "notIn"],
-  decimal: ["eq", "not", "gt", "gte", "lt", "lte", "in", "notIn"],
-  date: ["eq", "not", "gt", "gte", "lt", "lte", "in", "notIn"],
-  boolean: ["eq", "not"],
-  enum: ["eq", "not", "in", "notIn"]
-};
-var UNSAFE_KEYS2 = ["__proto__", "constructor", "prototype"];
-var DATE_STRING_PATTERN = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:\d{2})?)?$/;
-
-// src/app/queryBuilder/marge.ts
-var buildNestedField = (path2, condition) => {
-  const segments = path2.split(".");
-  for (const segment of segments) {
-    if (UNSAFE_KEYS2.includes(segment)) return {};
-  }
-  return segments.reduceRight(
-    (acc, part) => ({ [part]: acc }),
-    condition
-  );
-};
-var deepMerge = (target, source) => {
-  for (const [key, value] of Object.entries(source)) {
-    if (UNSAFE_KEYS2.includes(key)) continue;
-    const isPlainObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
-    if (isPlainObj(value) && isPlainObj(target[key])) {
-      deepMerge(
-        target[key],
-        value
-      );
-    } else {
-      target[key] = value;
-    }
-  }
-  return target;
-};
-var buildWhereFromFilters = (filters) => {
-  const grouped = {};
-  for (const { field, operator, value } of filters) {
-    const prismaOp = OPERATOR_MAP[operator];
-    if (!prismaOp) continue;
-    grouped[field] = { ...grouped[field] ?? {}, [prismaOp]: value };
-  }
-  const where = {};
-  for (const [field, condition] of Object.entries(grouped)) {
-    deepMerge(where, buildNestedField(field, condition));
-  }
-  return where;
-};
-var buildSearchWhere = (search, searchableFields = []) => {
-  if (!search || searchableFields.length === 0) return void 0;
-  return {
-    OR: searchableFields.map(
-      (field) => buildNestedField(field, { contains: search, mode: "insensitive" })
-    )
-  };
-};
-var buildWhere = (parsed2, config3, tenantScope) => {
-  const conditions = [];
-  const filterWhere = buildWhereFromFilters(parsed2.filters);
-  if (Object.keys(filterWhere).length > 0) conditions.push(filterWhere);
-  const searchWhere = buildSearchWhere(parsed2.search, config3.searchableFields);
-  if (searchWhere) conditions.push(searchWhere);
-  if (config3.softDelete) conditions.push({ deletedAt: null });
-  if (tenantScope) conditions.push(tenantScope);
-  if (conditions.length === 0) return {};
-  if (conditions.length === 1) return conditions[0] ?? {};
-  return { AND: conditions };
-};
-var buildOrderBy = (parsed2, config3) => {
-  if (parsed2.sorts.length === 0) {
-    return [{ [config3.defaultSortField ?? DEFAULT_SORT_FIELD]: "desc" }];
-  }
-  return parsed2.sorts.map(({ field, order }) => buildNestedField(field, order));
-};
-var buildDynamicSelect = (fields) => {
-  if (!fields || fields.length === 0) return void 0;
-  const safeFields = fields.filter((f) => !UNSAFE_KEYS2.includes(f));
-  return safeFields.length > 0 ? Object.fromEntries(safeFields.map((f) => [f, true])) : void 0;
-};
-var buildInclude = (requested, defaultInclude) => {
-  const include = { ...defaultInclude ?? {} };
-  for (const relation of requested ?? []) {
-    if (UNSAFE_KEYS2.includes(relation)) continue;
-    include[relation] = true;
-  }
-  return Object.keys(include).length > 0 ? include : void 0;
-};
-var buildSelectOrInclude = (parsed2, config3) => {
-  const dynamicSelect = buildDynamicSelect(parsed2.fields);
-  if (dynamicSelect) return { select: dynamicSelect };
-  if (config3.defaultSelect) return { select: config3.defaultSelect };
-  const include = buildInclude(parsed2.include, config3.defaultInclude);
-  return include ? { include } : {};
-};
-var buildPrismaArgs = (parsed2, config3, tenantScope) => {
-  const { select, include } = buildSelectOrInclude(parsed2, config3);
-  return {
-    where: buildWhere(parsed2, config3, tenantScope),
-    orderBy: buildOrderBy(parsed2, config3),
-    skip: parsed2.skip,
-    take: parsed2.limit,
-    ...select && { select },
-    ...include && { include }
-  };
-};
-
-// src/app/queryBuilder/parser.ts
-import { StatusCodes as StatusCodes6 } from "http-status-codes";
-var getBaseType = (config3) => typeof config3 === "string" ? config3 : "enum";
-var assertValidDepth = (field, maxDepth) => {
-  if (field.split(".").length > maxDepth) {
-    throw new appError_default(
-      StatusCodes6.BAD_REQUEST,
-      `Field "${field}" exceeds the maximum allowed nesting depth of ${maxDepth}.`
-    );
-  }
-};
-var assertOperatorAllowedForType = (field, operator, type) => {
-  const allowed = OPERATORS_BY_TYPE[type] ?? [];
-  if (!allowed.includes(operator)) {
-    throw new appError_default(
-      StatusCodes6.BAD_REQUEST,
-      `Operator "${operator}" is not allowed on field "${field}" (type: ${type}).`
-    );
-  }
-};
-var isValidCalendarDate = (raw3) => {
-  const datePart = raw3.split("T")[0];
-  const match = datePart?.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return false;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
-};
-var castSingleValue = (raw3, field, config3) => {
-  if (typeof config3 === "object" && config3.type === "enum") {
-    const validValues = Object.values(config3.enum);
-    if (!validValues.includes(raw3)) {
-      throw new appError_default(
-        StatusCodes6.BAD_REQUEST,
-        `Invalid value "${raw3}" for "${field}". Expected one of: ${validValues.join(", ")}.`
-      );
-    }
-    return raw3;
-  }
-  switch (config3) {
-    case "number": {
-      const num = Number(raw3);
-      if (raw3.trim() === "" || Number.isNaN(num)) {
-        throw new appError_default(
-          StatusCodes6.BAD_REQUEST,
-          `Invalid number value for "${field}": "${raw3}"`
-        );
-      }
-      return num;
-    }
-    case "decimal": {
-      try {
-        return new prismaNamespace_exports.Decimal(raw3);
-      } catch {
-        throw new appError_default(
-          StatusCodes6.BAD_REQUEST,
-          `Invalid decimal value for "${field}": "${raw3}"`
-        );
-      }
-    }
-    case "boolean": {
-      if (raw3 !== "true" && raw3 !== "false") {
-        throw new appError_default(
-          StatusCodes6.BAD_REQUEST,
-          `"${field}" must be "true" or "false".`
-        );
-      }
-      return raw3 === "true";
-    }
-    case "date": {
-      if (!DATE_STRING_PATTERN.test(raw3)) {
-        throw new appError_default(
-          StatusCodes6.BAD_REQUEST,
-          `Invalid date value for "${field}": "${raw3}". Expected format YYYY-MM-DD.`
-        );
-      }
-      if (!isValidCalendarDate(raw3)) {
-        throw new appError_default(
-          StatusCodes6.BAD_REQUEST,
-          `"${raw3}" is not a real calendar date for "${field}".`
-        );
-      }
-      const date = new Date(raw3);
-      if (Number.isNaN(date.getTime())) {
-        throw new appError_default(
-          StatusCodes6.BAD_REQUEST,
-          `Invalid date value for "${field}": "${raw3}"`
-        );
-      }
-      return date;
-    }
-    default:
-      return raw3;
-  }
-};
-var castValue = (raw3, field, config3, operator) => {
-  const str3 = String(raw3);
-  if (operator === "in" || operator === "notIn") {
-    return str3.split(",").map((v) => castSingleValue(v.trim(), field, config3));
-  }
-  return castSingleValue(str3, field, config3);
-};
-var parsePagination = (query, maxLimit) => {
-  const page = Math.max(1, Number(query.page) || DEFAULT_PAGE);
-  const requestedLimit = Number(query.limit) || DEFAULT_LIMIT;
-  const limit = Math.min(Math.max(1, requestedLimit), maxLimit);
-  const skip = (page - 1) * limit;
-  return { page, limit, skip };
-};
-var parseFilters = (query, config3, maxNestedDepth) => {
-  const filters = [];
-  for (const [key, rawValue] of Object.entries(query)) {
-    if (RESERVED_QUERY_KEYS.includes(key)) continue;
-    const fieldConfig = config3.filterableFields[key];
-    if (!fieldConfig) continue;
-    assertValidDepth(key, maxNestedDepth);
-    const baseType = getBaseType(fieldConfig);
-    if (rawValue !== null && typeof rawValue === "object" && !Array.isArray(rawValue)) {
-      for (const [op, val] of Object.entries(
-        rawValue
-      )) {
-        if (!VALID_OPERATORS.includes(op)) continue;
-        assertOperatorAllowedForType(key, op, baseType);
-        filters.push({
-          field: key,
-          operator: op,
-          value: castValue(val, key, fieldConfig, op)
-        });
-      }
-    } else {
-      assertOperatorAllowedForType(key, "eq", baseType);
-      filters.push({
-        field: key,
-        operator: "eq",
-        value: castValue(rawValue, key, fieldConfig, "eq")
-      });
-    }
-  }
-  return filters;
-};
-var parseSort = (query, config3, maxNestedDepth) => {
-  const sorts = [];
-  const seenFields = /* @__PURE__ */ new Set();
-  const pushSort = (field, order) => {
-    if (seenFields.has(field)) return;
-    seenFields.add(field);
-    assertValidDepth(field, maxNestedDepth);
-    sorts.push({ field, order });
-  };
-  if (typeof query.sort === "string" && query.sort.trim() !== "") {
-    for (const raw3 of query.sort.split(",")) {
-      const trimmed = raw3.trim();
-      const desc = trimmed.startsWith("-");
-      const field = desc ? trimmed.slice(1) : trimmed;
-      if (config3.sortableFields.includes(field))
-        pushSort(field, desc ? "desc" : "asc");
-    }
-    return sorts;
-  }
-  if (typeof query.sortBy === "string" && config3.sortableFields.includes(query.sortBy)) {
-    pushSort(query.sortBy, query.sortOrder === "desc" ? "desc" : "asc");
-  }
-  return sorts;
-};
-var parseCsvWhitelisted = (value, allowed, maxItems) => {
-  if (typeof value !== "string" || value.trim() === "") return void 0;
-  const requested = value.split(",").map((v) => v.trim()).filter(Boolean);
-  const filtered = allowed ? requested.filter((f) => allowed.includes(f)) : requested;
-  const unique = Array.from(new Set(filtered));
-  if (unique.length === 0) return void 0;
-  if (maxItems && unique.length > maxItems) {
-    throw new appError_default(
-      StatusCodes6.BAD_REQUEST,
-      `A maximum of ${maxItems} items can be requested at once.`
-    );
-  }
-  return unique;
-};
-var parseSearch = (query, maxSearchLength) => {
-  if (typeof query.search !== "string") return void 0;
-  const trimmed = query.search.trim();
-  if (trimmed === "") return void 0;
-  if (trimmed.length > maxSearchLength) {
-    throw new appError_default(
-      StatusCodes6.BAD_REQUEST,
-      `Search query is too long (max ${maxSearchLength} characters).`
-    );
-  }
-  return trimmed;
-};
-var parseQuery = (query, config3) => {
-  const maxLimit = config3.maxLimit ?? DEFAULT_MAX_LIMIT;
-  const maxInclude = config3.maxInclude ?? DEFAULT_MAX_INCLUDE;
-  const maxNestedDepth = config3.maxNestedDepth ?? DEFAULT_MAX_NESTED_DEPTH;
-  const maxSearchLength = config3.maxSearchLength ?? DEFAULT_MAX_SEARCH_LENGTH;
-  const { page, limit, skip } = parsePagination(query, maxLimit);
-  const search = parseSearch(query, maxSearchLength);
-  const fields = parseCsvWhitelisted(query.fields, config3.selectableFields);
-  const include = parseCsvWhitelisted(
-    query.include,
-    config3.includableRelations,
-    maxInclude
-  );
-  return {
-    page,
-    limit,
-    skip,
-    ...search !== void 0 && { search },
-    filters: parseFilters(query, config3, maxNestedDepth),
-    sorts: parseSort(query, config3, maxNestedDepth),
-    ...fields !== void 0 && { fields },
-    ...include !== void 0 && { include }
-  };
-};
-
-// src/app/queryBuilder/queryBuilder.ts
-var validateConfig = (config3) => {
-  for (const field of config3.selectableFields ?? []) {
-    if (field.includes(".")) {
-      throw new Error(
-        `QueryConfig.selectableFields: "${field}" is invalid \u2014 nested field selection is not supported.`
-      );
-    }
-  }
-  for (const relation of config3.includableRelations ?? []) {
-    if (relation.includes(".")) {
-      throw new Error(
-        `QueryConfig.includableRelations: "${relation}" is invalid \u2014 only direct relation names are supported.`
-      );
-    }
-  }
-  for (const field of config3.searchableFields ?? []) {
-    const baseField = field.includes(".") ? void 0 : field;
-    if (baseField && config3.filterableFields[baseField]) {
-      const fieldConfig = config3.filterableFields[baseField];
-      const baseType = typeof fieldConfig === "string" ? fieldConfig : "enum";
-      if (baseType !== "string") {
-        throw new Error(
-          `QueryConfig.searchableFields: "${field}" is type "${baseType}", but search uses "contains" which only works on strings.`
-        );
-      }
-    }
-  }
-};
-var QueryBuilder = class {
-  delegate;
-  config;
-  constructor(delegate, config3) {
-    const merged = {
-      maxLimit: DEFAULT_MAX_LIMIT,
-      maxInclude: DEFAULT_MAX_INCLUDE,
-      maxNestedDepth: DEFAULT_MAX_NESTED_DEPTH,
-      maxSearchLength: DEFAULT_MAX_SEARCH_LENGTH,
-      defaultSortField: DEFAULT_SORT_FIELD,
-      ...config3
-    };
-    validateConfig(merged);
-    this.delegate = delegate;
-    this.config = merged;
-  }
-  parse(rawQuery) {
-    return parseQuery(rawQuery, this.config);
-  }
-  buildArgs(parsed2, tenantScope) {
-    return buildPrismaArgs(parsed2, this.config, tenantScope);
-  }
-  buildMeta(parsed2, total) {
-    return {
-      page: parsed2.page,
-      limit: parsed2.limit,
-      total,
-      totalPage: Math.max(1, Math.ceil(total / parsed2.limit))
-    };
-  }
-  async execute(rawQuery, tenantScope) {
-    const parsed2 = this.parse(rawQuery);
-    const args = this.buildArgs(parsed2, tenantScope);
-    const where = args.where;
-    const [data, total] = await Promise.all([
-      this.delegate.findMany({ ...args, where }),
-      this.delegate.count({ where })
-    ]);
-    return { data, meta: this.buildMeta(parsed2, total) };
-  }
-};
-
-// src/app/modules/payment/payment.const.ts
-var PLAN_PRICING = {
-  FREE: { amountMinor: 0, currency: "usd" },
-  PRO: { amountMinor: 2900, currency: "usd" },
-  ENTERPRISE: { amountMinor: 9900, currency: "usd" }
-};
-var PAYMENT_SELECT = {
-  id: true,
-  userId: true,
-  companyId: true,
-  subscriptionId: true,
-  provider: true,
-  status: true,
-  amountMinor: true,
-  currency: true,
-  transactionId: true,
-  providerPaymentId: true,
-  paidAt: true,
-  failedAt: true,
-  createdAt: true
-};
-
-// src/app/modules/payment/payment.service.ts
-var paymentQueryBuilder = new QueryBuilder(prisma.payment, {
-  searchableFields: [],
-  filterableFields: {
-    status: {
-      type: "enum",
-      enum: {
-        PENDING: "PENDING",
-        PROCESSING: "PROCESSING",
-        PAID: "PAID",
-        FAILED: "FAILED",
-        CANCELLED: "CANCELLED",
-        REFUNDED: "REFUNDED"
-      }
-    },
-    provider: {
-      type: "enum",
-      enum: {
-        STRIPE: "STRIPE",
-        BKASH: "BKASH",
-        SSLCOMMERZ: "SSLCOMMERZ"
-      }
-    },
-    createdAt: "date"
-  },
-  sortableFields: ["createdAt", "amountMinor"],
-  selectableFields: Object.keys(PAYMENT_SELECT),
-  defaultSelect: PAYMENT_SELECT,
-  defaultSortField: "createdAt"
-});
-var PLAN_RANK = {
-  FREE: 0,
-  PRO: 1,
-  ENTERPRISE: 2
-};
-var createCheckoutSession = async (userId, companyId, payload) => {
-  const pricing = PLAN_PRICING[payload.plan];
-  if (!pricing) {
-    throw new appError_default(
-      StatusCodes7.BAD_REQUEST,
-      `Invalid subscription plan: ${payload.plan}`
-    );
-  }
-  const stripe2 = getStripe();
-  const clientUrl = config_default.app.clientUrl.split(",")[0]?.trim() || "http://localhost:3000";
-  const existingSubscription = await prisma.subscription.findUnique({
-    where: { companyId }
-  });
-  const stillActive = existingSubscription?.status === "ACTIVE" && (!existingSubscription.currentPeriodEnd || existingSubscription.currentPeriodEnd > /* @__PURE__ */ new Date());
-  if (existingSubscription && stillActive && PLAN_RANK[existingSubscription.plan] >= PLAN_RANK[payload.plan]) {
-    throw new appError_default(
-      StatusCodes7.CONFLICT,
-      `Your company is already on the ${existingSubscription.plan} plan.`
-    );
-  }
-  if (payload.plan === "FREE") {
-    throw new appError_default(
-      StatusCodes7.BAD_REQUEST,
-      "The FREE plan does not require checkout."
-    );
-  }
-  const payment = await prisma.payment.create({
-    data: {
-      userId,
-      companyId,
-      provider: "STRIPE",
-      status: "PENDING",
-      amountMinor: pricing.amountMinor,
-      currency: pricing.currency.toUpperCase(),
-      metadata: {
-        plan: payload.plan
-      }
-    }
-  });
-  try {
-    const session = await stripe2.checkout.sessions.create({
-      mode: "payment",
-      payment_method_types: ["card"],
-      line_items: [
-        {
-          price_data: {
-            currency: pricing.currency,
-            product_data: {
-              name: `${payload.plan} plan subscription`
-            },
-            unit_amount: pricing.amountMinor
-          },
-          quantity: 1
-        }
-      ],
-      success_url: `${clientUrl}/billing/success?paymentId=${payment.id}`,
-      cancel_url: `${clientUrl}/billing/cancel?paymentId=${payment.id}`,
-      metadata: {
-        paymentId: payment.id,
-        companyId,
-        plan: payload.plan
-      },
-      payment_intent_data: {
-        metadata: {
-          paymentId: payment.id,
-          companyId,
-          plan: payload.plan
-        }
-      }
-    });
-    if (!session.url) {
-      await prisma.payment.update({
-        where: { id: payment.id },
-        data: {
-          status: "FAILED",
-          failedAt: /* @__PURE__ */ new Date()
-        }
-      });
-      throw new appError_default(
-        StatusCodes7.INTERNAL_SERVER_ERROR,
-        "Stripe checkout URL was not generated."
-      );
-    }
-    await prisma.payment.update({
-      where: { id: payment.id },
-      data: {
-        providerPaymentId: session.id
-      }
-    });
-    return {
-      paymentId: payment.id,
-      checkoutUrl: session.url
-    };
-  } catch (error) {
-    if (error instanceof appError_default) {
-      throw error;
-    }
-    await prisma.payment.update({
-      where: { id: payment.id },
-      data: {
-        status: "FAILED",
-        failedAt: /* @__PURE__ */ new Date()
-      }
-    });
-    throw new appError_default(
-      StatusCodes7.BAD_GATEWAY,
-      "Unable to create Stripe checkout session."
-    );
-  }
-};
-var markCheckoutPaid = async (session) => {
-  const paymentId = session.metadata?.paymentId;
-  if (!paymentId) return false;
-  const companyId = session.metadata?.companyId;
-  const plan = session.metadata?.plan;
-  const paymentIntent = session.payment_intent;
-  const transactionId = typeof paymentIntent === "string" ? paymentIntent : paymentIntent?.id;
-  return prisma.$transaction(async (tx) => {
-    const claimed = await tx.payment.updateMany({
-      where: {
-        id: paymentId,
-        status: { in: ["PENDING", "PROCESSING", "FAILED"] }
-      },
-      data: {
-        status: "PAID",
-        paidAt: /* @__PURE__ */ new Date(),
-        failedAt: null,
-        ...transactionId ? { transactionId } : {}
-      }
-    });
-    if (claimed.count === 0) return false;
-    const payment = await tx.payment.findUniqueOrThrow({
-      where: { id: paymentId }
-    });
-    if (companyId && plan) {
-      const currentPeriodStart = /* @__PURE__ */ new Date();
-      const currentPeriodEnd = new Date(
-        currentPeriodStart.getTime() + 30 * 24 * 60 * 60 * 1e3
-      );
-      const subscription = await tx.subscription.upsert({
-        where: { companyId },
-        update: {
-          plan,
-          status: "ACTIVE",
-          currentPeriodStart,
-          currentPeriodEnd,
-          cancelAtPeriodEnd: false
-        },
-        create: {
-          companyId,
-          plan,
-          status: "ACTIVE",
-          currentPeriodStart,
-          currentPeriodEnd,
-          cancelAtPeriodEnd: false
-        }
-      });
-      await tx.payment.update({
-        where: { id: paymentId },
-        data: { subscriptionId: subscription.id }
-      });
-    }
-    await tx.notification.create({
-      data: {
-        userId: payment.userId,
-        title: "Payment Successful",
-        message: `Your payment of ${(Number(payment.amountMinor) / 100).toFixed(2)} ${payment.currency} was successful.`,
-        type: "PAYMENT_SUCCESS"
-      }
-    });
-    return true;
-  });
-};
-var markCheckoutFailed = async (paymentId) => {
-  const claimed = await prisma.payment.updateMany({
-    where: { id: paymentId, status: { in: ["PENDING", "PROCESSING"] } },
-    data: { status: "FAILED", failedAt: /* @__PURE__ */ new Date() }
-  });
-  if (claimed.count === 0) return;
-  const payment = await prisma.payment.findUnique({
-    where: { id: paymentId },
-    select: { userId: true }
-  });
-  if (!payment) return;
-  await prisma.notification.create({
-    data: {
-      userId: payment.userId,
-      title: "Payment Failed",
-      message: "Your payment could not be completed. Please try again.",
-      type: "PAYMENT_FAILED"
-    }
-  });
-};
-var handleStripeWebhook = async (rawBody, signature) => {
-  const stripe2 = getStripe();
-  if (!config_default.stripe.webhookSecret) {
-    throw new appError_default(
-      StatusCodes7.SERVICE_UNAVAILABLE,
-      "Stripe webhook secret is not configured."
-    );
-  }
-  if (!signature) {
-    throw new appError_default(
-      StatusCodes7.BAD_REQUEST,
-      "Missing Stripe signature header."
-    );
-  }
-  let event;
-  try {
-    event = stripe2.webhooks.constructEvent(
-      rawBody,
-      signature,
-      config_default.stripe.webhookSecret
-    );
-  } catch {
-    throw new appError_default(
-      StatusCodes7.BAD_REQUEST,
-      "Invalid Stripe webhook signature."
-    );
-  }
-  const existingEvent = await prisma.paymentWebhookEvent.findUnique({
-    where: {
-      provider_eventId: {
-        provider: "STRIPE",
-        eventId: event.id
-      }
-    }
-  });
-  if (existingEvent?.processed) {
-    return {
-      received: true,
-      alreadyProcessed: true
-    };
-  }
-  await prisma.paymentWebhookEvent.upsert({
-    where: {
-      provider_eventId: {
-        provider: "STRIPE",
-        eventId: event.id
-      }
-    },
-    update: {},
-    create: {
-      provider: "STRIPE",
-      eventId: event.id,
-      eventType: event.type,
-      payload: JSON.parse(JSON.stringify(event))
-    }
-  });
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object;
-    if (session.payment_status === "paid") {
-      await markCheckoutPaid(session);
-    }
-  } else if (event.type === "checkout.session.expired" || event.type === "payment_intent.payment_failed") {
-    const object = event.data.object;
-    const paymentId = object.metadata?.paymentId;
-    if (paymentId) {
-      await markCheckoutFailed(paymentId);
-    }
-  }
-  await prisma.paymentWebhookEvent.update({
-    where: {
-      provider_eventId: {
-        provider: "STRIPE",
-        eventId: event.id
-      }
-    },
-    data: {
-      processed: true,
-      processedAt: /* @__PURE__ */ new Date()
-    }
-  });
-  return {
-    received: true
-  };
-};
-var getMyPayments = async (userId, query) => {
-  return paymentQueryBuilder.execute(query, {
-    userId
-  });
-};
-var getAllPayments = async (query) => {
-  return paymentQueryBuilder.execute(query);
-};
-var getPaymentById = async (id, requester) => {
-  const payment = await prisma.payment.findUnique({
-    where: {
-      id
-    },
-    select: PAYMENT_SELECT
-  });
-  if (!payment) {
-    throw new appError_default(
-      StatusCodes7.NOT_FOUND,
-      "Payment not found."
-    );
-  }
-  if (requester.role !== "ADMIN" && payment.userId !== requester.id) {
-    throw new appError_default(
-      StatusCodes7.FORBIDDEN,
-      "You don't have permission to view this payment."
-    );
-  }
-  return payment;
-};
-var syncPayment = async (id, requester) => {
-  const payment = await getPaymentById(id, requester);
-  if (payment.status !== "PENDING" && payment.status !== "PROCESSING") {
-    return payment;
-  }
-  if (!payment.providerPaymentId) {
-    return payment;
-  }
-  let session;
-  try {
-    session = await getStripe().checkout.sessions.retrieve(
-      payment.providerPaymentId
-    );
-  } catch {
-    throw new appError_default(
-      StatusCodes7.BAD_GATEWAY,
-      "Couldn't check the payment with Stripe. Please try again."
-    );
-  }
-  if (session.payment_status === "paid") {
-    await markCheckoutPaid(session);
-  } else if (session.status === "expired") {
-    await markCheckoutFailed(payment.id);
-  }
-  return getPaymentById(id, requester);
-};
-var paymentService = {
-  createCheckoutSession,
-  handleStripeWebhook,
-  getMyPayments,
-  getAllPayments,
-  getPaymentById,
-  syncPayment
-};
-
-// src/app/modules/webhook/webhook.controller.ts
-var handleStripeWebhook2 = catchAsync(async (req, res) => {
-  const signature = req.headers["stripe-signature"];
-  const result = await paymentService.handleStripeWebhook(
-    req.body,
-    signature
-  );
-  res.status(StatusCodes8.OK).json({
-    success: true,
-    message: "Webhook processed.",
-    data: result
-  });
-});
-var webhookController = {
-  handleStripeWebhook: handleStripeWebhook2
-};
-
-// src/app/modules/webhook/webhook.routes.ts
-var router = Router();
-router.post(
-  "/stripe",
-  express.raw({ type: "application/json" }),
-  webhookController.handleStripeWebhook
-);
-var webhookRoutes = router;
-
-// src/app/routes/index.ts
-import { Router as Router20 } from "express";
-
-// src/app/modules/admin/admin.routes.ts
-import { Router as Router2 } from "express";
-
-// src/app/middlewares/requireAuth.ts
-import { fromNodeHeaders } from "better-auth/node";
-import { StatusCodes as StatusCodes9 } from "http-status-codes";
-
-// src/lib/auth.ts
-import { betterAuth } from "better-auth";
-import { prismaAdapter } from "better-auth/adapters/prisma";
-import { APIError, createAuthMiddleware } from "better-auth/api";
-import { bearer, emailOTP, twoFactor } from "better-auth/plugins";
-
-// src/app/utils/bruteForceGuard.ts
-var MAX_ATTEMPTS = 5;
-var LOCKOUT_SECONDS = 15 * 60;
-var ATTEMPT_WINDOW_SECONDS = 15 * 60;
-var attemptsKey = (identifier) => `login:attempts:${identifier}`;
-var lockKey = (identifier) => `login:locked:${identifier}`;
-var isLocked = async (identifier) => {
-  if (config_default.app.env !== "production") {
-    return false;
-  }
-  try {
-    const locked = await redis.get(lockKey(identifier));
-    return Boolean(locked);
-  } catch {
-    return false;
-  }
-};
-var recordFailedAttempt = async (identifier) => {
-  if (config_default.app.env !== "production") {
-    return;
-  }
-  try {
-    const key = attemptsKey(identifier);
-    const attempts = await redis.incr(key);
-    if (attempts === 1) {
-      await redis.expire(key, ATTEMPT_WINDOW_SECONDS);
-    }
-    if (attempts >= MAX_ATTEMPTS) {
-      await redis.set(lockKey(identifier), "1", "EX", LOCKOUT_SECONDS);
-      await redis.del(key);
-    }
-  } catch {
-  }
-};
-var clearFailedAttempts = async (identifier) => {
-  if (config_default.app.env !== "production") {
-    return;
-  }
-  try {
-    await redis.del(attemptsKey(identifier));
-  } catch {
-  }
-};
-
-// src/app/utils/escapeHtml.ts
-var ENTITIES = {
-  "&": "&amp;",
-  "<": "&lt;",
-  ">": "&gt;",
-  '"': "&quot;",
-  "'": "&#39;"
-};
-var escapeHtml = (value) => value.replace(/[&<>"']/g, (char) => ENTITIES[char] ?? char);
-
-// src/app/utils/emailTemplates.ts
-var welcomeEmailTemplate = (name) => `
-  <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; color: #111;">
-    <h2>Welcome, ${escapeHtml(name)}!</h2>
-    <p>Thanks for joining. Your account has been created successfully.</p>
-  </div>
-`;
-var otpEmailTemplate = (name, otp, expirationMinutes, purpose = "verify your email") => `
-  <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; color: #111;">
-    <h2>Verification Code</h2>
-    <p>Hi ${escapeHtml(name)}, use the code below to ${escapeHtml(purpose)}.</p>
-    <div style="display:inline-block;padding:12px 24px;background:#f0f4ff;color:#007bff;font-size:28px;font-weight:bold;letter-spacing:8px;border-radius:4px;margin-top:20px;">${escapeHtml(otp)}</div>
-    <p style="font-size: 13px; color: #666; margin-top: 16px;">This code will expire in ${expirationMinutes} minutes. If you didn't request this, please ignore this email.</p>
-  </div>
-`;
-
-// src/lib/nodemailer.ts
-import nodemailer from "nodemailer";
-var transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: config_default.email.smtpUser,
-    pass: config_default.email.smtpPassword
-  }
-});
-
-// src/app/utils/sendEmailSmtp.ts
-var sendEmailSmtp = async ({ to, subject, html }) => {
-  try {
-    await transporter.sendMail({
-      from: config_default.email.smtpUser,
-      to,
-      subject,
-      html
-    });
-  } catch (error) {
-    console.error("[Email] Failed to send email via SMTP:", error);
-  }
-};
 
 // src/lib/auth.ts
 var isProduction = config_default.app.env === "production";
@@ -3395,15 +2083,1391 @@ var auth = betterAuth({
   }
 });
 
-// src/app/middlewares/requireAuth.ts
-var requireAuth = catchAsync(
-  async (req, _res, next) => {
+// src/app/modules/demo/demo.const.ts
+var DEMO_EMAIL_DOMAIN = "demo.evalora.app";
+var DEMO_PASSWORD = "Demo@12345";
+var DEMO_ACCOUNTS = {
+  CANDIDATE: {
+    name: "Demo Candidate",
+    email: `candidate@${DEMO_EMAIL_DOMAIN}`,
+    role: "CANDIDATE"
+  },
+  RECRUITER: {
+    name: "Demo Recruiter",
+    email: `recruiter@${DEMO_EMAIL_DOMAIN}`,
+    role: "RECRUITER"
+  },
+  ADMIN: {
+    name: "Demo Admin",
+    email: `admin@${DEMO_EMAIL_DOMAIN}`,
+    role: "ADMIN"
+  }
+};
+
+// src/app/middlewares/demoGuard.ts
+var SAFE_METHODS = /* @__PURE__ */ new Set(["GET", "HEAD", "OPTIONS"]);
+var ALWAYS_ALLOWED = [
+  /\/api\/auth\/sign-out/,
+  /\/api\/auth\/sign-in/,
+  /\/api\/v1\/auth\/logout/,
+  /\/api\/v1\/demo\/login/
+];
+var SENSITIVE = [
+  /\/api\/auth\//,
+  /\/api\/v1\/auth\/change-password/,
+  /\/api\/v1\/auth\/reset-password/
+];
+var demoGuard = async (req, res, next) => {
+  if (!config_default.demo.enabled || SAFE_METHODS.has(req.method)) {
+    return next();
+  }
+  const url = req.originalUrl.split("?")[0] ?? "";
+  if (ALWAYS_ALLOWED.some((p) => p.test(url))) return next();
+  try {
     const session = await auth.api.getSession({
       headers: fromNodeHeaders(req.headers)
     });
+    const user = session?.user;
+    if (!user?.email.endsWith(`@${DEMO_EMAIL_DOMAIN}`)) return next();
+    const blocked = SENSITIVE.some((p) => p.test(url)) || user.role === "ADMIN";
+    if (blocked) {
+      return res.status(StatusCodes.FORBIDDEN).json({
+        success: false,
+        message: "This action is disabled in the demo account."
+      });
+    }
+  } catch {
+  }
+  next();
+};
+
+// src/app/middlewares/forceHttps.ts
+var forceHttps = (req, res, next) => {
+  const isSecure = req.secure || req.headers["x-forwarded-proto"] === "https";
+  if (!isSecure) {
+    return res.redirect(301, `https://${req.headers.host}${req.originalUrl}`);
+  }
+  next();
+};
+
+// src/app/middlewares/globalErrorHandler.ts
+import { StatusCodes as StatusCodes4 } from "http-status-codes";
+import { ZodError } from "zod";
+import multer from "multer";
+
+// src/app/errors/appError.ts
+var AppError = class extends Error {
+  statusCode;
+  errorCode;
+  details;
+  isOperational;
+  constructor(statusCode, message, errorCode, details) {
+    super(message);
+    this.name = this.constructor.name;
+    this.statusCode = statusCode;
+    this.isOperational = true;
+    if (errorCode !== void 0) {
+      this.errorCode = errorCode;
+    }
+    if (details !== void 0) {
+      this.details = details;
+    }
+    Error.captureStackTrace?.(this, this.constructor);
+  }
+};
+var appError_default = AppError;
+
+// src/app/errors/handlePrismaError.ts
+import { StatusCodes as StatusCodes2 } from "http-status-codes";
+var handlePrismaError = (error) => {
+  if (error instanceof prismaNamespace_exports.PrismaClientValidationError) {
+    return {
+      statusCode: StatusCodes2.BAD_REQUEST,
+      message: "Invalid request data.",
+      errorCode: "PRISMA_VALIDATION_ERROR"
+    };
+  }
+  if (error instanceof prismaNamespace_exports.PrismaClientKnownRequestError) {
+    switch (error.code) {
+      case "P2002":
+        return {
+          statusCode: StatusCodes2.CONFLICT,
+          message: "Resource already exists.",
+          errorCode: error.code
+        };
+      case "P2003":
+        return {
+          statusCode: StatusCodes2.BAD_REQUEST,
+          message: "Foreign key constraint failed.",
+          errorCode: error.code
+        };
+      case "P2025":
+        return {
+          statusCode: StatusCodes2.NOT_FOUND,
+          message: "Resource not found.",
+          errorCode: error.code
+        };
+      default:
+        return {
+          statusCode: StatusCodes2.BAD_REQUEST,
+          message: "Database request failed.",
+          errorCode: error.code
+        };
+    }
+  }
+  if (error instanceof prismaNamespace_exports.PrismaClientInitializationError) {
+    if (error.errorCode === "P1000") {
+      return {
+        statusCode: StatusCodes2.UNAUTHORIZED,
+        message: "Database authentication failed.",
+        errorCode: "P1000"
+      };
+    }
+    if (error.errorCode === "P1001") {
+      return {
+        statusCode: StatusCodes2.SERVICE_UNAVAILABLE,
+        message: "Can't reach database server.",
+        errorCode: "P1001"
+      };
+    }
+    return {
+      statusCode: StatusCodes2.SERVICE_UNAVAILABLE,
+      message: "Database connection failed.",
+      errorCode: error.errorCode ?? "PRISMA_INIT_ERROR"
+    };
+  }
+  if (error instanceof prismaNamespace_exports.PrismaClientUnknownRequestError) {
+    return {
+      statusCode: StatusCodes2.INTERNAL_SERVER_ERROR,
+      message: "Database query failed.",
+      errorCode: "PRISMA_UNKNOWN_ERROR"
+    };
+  }
+  return null;
+};
+
+// src/app/errors/handleZodError.ts
+import { StatusCodes as StatusCodes3 } from "http-status-codes";
+var handleZodError = (error) => {
+  return {
+    statusCode: StatusCodes3.BAD_REQUEST,
+    message: "Validation failed",
+    details: error.issues.map((issue) => ({
+      field: issue.path.join("."),
+      message: issue.message
+    }))
+  };
+};
+
+// src/app/middlewares/globalErrorHandler.ts
+var globalErrorHandler = (error, _req, res, _next) => {
+  let statusCode = StatusCodes4.INTERNAL_SERVER_ERROR;
+  let message = "Something went wrong";
+  let errorCode;
+  let errors = [];
+  if (error instanceof appError_default) {
+    statusCode = error.statusCode;
+    message = error.message;
+    errorCode = error.errorCode;
+    errors = Array.isArray(error.details) ? error.details : error.details !== void 0 ? [error.details] : [];
+  } else if (error instanceof ZodError) {
+    const zodError = handleZodError(error);
+    statusCode = zodError.statusCode;
+    message = zodError.message;
+    errors = zodError.details;
+  } else if (error instanceof ZodError) {
+    const zodError = handleZodError(error);
+    statusCode = zodError.statusCode;
+    message = zodError.message;
+    errors = zodError.details;
+  } else if (error instanceof multer.MulterError) {
+    const tooLarge = error.code === "LIMIT_FILE_SIZE";
+    statusCode = tooLarge ? StatusCodes4.REQUEST_TOO_LONG : StatusCodes4.BAD_REQUEST;
+    message = tooLarge ? "The uploaded file is too large." : error.message;
+  } else {
+    const prismaError = handlePrismaError(error);
+    if (prismaError) {
+      statusCode = prismaError.statusCode;
+      message = prismaError.message;
+      errorCode = prismaError.errorCode;
+    } else if (error instanceof Error) {
+      message = error.message;
+    }
+  }
+  const response = { success: false, message, errors };
+  if (errorCode) response.errorCode = errorCode;
+  if (config_default.app.env === "development") {
+    response.stack = error instanceof Error ? error.stack : void 0;
+  }
+  res.status(statusCode).json(response);
+};
+
+// src/app/middlewares/notFound.ts
+import { StatusCodes as StatusCodes5 } from "http-status-codes";
+var notFound = (req, res) => {
+  res.status(StatusCodes5.NOT_FOUND).json({
+    success: false,
+    message: "Route not found.",
+    errors: [{ path: req.originalUrl }]
+  });
+};
+
+// src/app/middlewares/rateLimiters.ts
+import { timingSafeEqual } from "crypto";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import { StatusCodes as StatusCodes6 } from "http-status-codes";
+
+// src/app/middlewares/rate-limit-store.ts
+var PREFIX = "ratelimit";
+var INCR_WITH_TTL_LUA = `
+local hits = redis.call('INCR', KEYS[1])
+if hits == 1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return hits
+`;
+var RedisStore = class {
+  prefix = PREFIX;
+  windowMs;
+  storeName;
+  /**
+   * @param windowMs - the rate-limit window in milliseconds; converted to
+   *   seconds for Redis EXPIRE.
+   * @param storeName - short identifier used in the Redis key prefix so
+   *   different limiters don't share counters.
+   */
+  constructor(windowMs, storeName) {
+    this.windowMs = windowMs;
+    this.storeName = storeName;
+  }
+  /** No-op init — the client is constructed eagerly in radis.ts. */
+  init(_options) {
+  }
+  async increment(key) {
+    const fullKey = `${this.prefix}:${this.storeName}:${key}`;
+    const ttlSeconds = Math.max(1, Math.ceil(this.windowMs / 1e3));
+    try {
+      let hits;
+      const maybeEval = redis.eval;
+      if (typeof maybeEval === "function") {
+        hits = await redis.eval(INCR_WITH_TTL_LUA, 1, fullKey, ttlSeconds);
+      } else {
+        hits = await redis.incr(fullKey);
+        if (hits === 1) {
+          await redis.expire(fullKey, ttlSeconds);
+        }
+      }
+      const resetTime = new Date(Date.now() + ttlSeconds * 1e3);
+      return { totalHits: hits, resetTime };
+    } catch (error) {
+      console.warn("[RedisStore] increment failed; failing open:", error);
+      return { totalHits: 0, resetTime: void 0 };
+    }
+  }
+  async decrement(key) {
+    const fullKey = `${this.prefix}:${this.storeName}:${key}`;
+    try {
+      const maybeDecr = redis.decr;
+      if (typeof maybeDecr === "function") {
+        await redis.decr(fullKey);
+      }
+    } catch (error) {
+      console.warn("[RedisStore] decrement failed; failing open:", error);
+    }
+  }
+  async resetKey(key) {
+    const fullKey = `${this.prefix}:${this.storeName}:${key}`;
+    try {
+      await redis.del(fullKey);
+    } catch (error) {
+      console.warn("[RedisStore] resetKey failed; failing open:", error);
+    }
+  }
+  async resetAll() {
+    try {
+      const pattern = `${this.prefix}:*`;
+      const scan = redis.scan;
+      if (typeof scan === "function") {
+        let cursor = "0";
+        do {
+          const [nextCursor, keys] = await scan(pattern);
+          cursor = nextCursor;
+          if (keys.length > 0) {
+            await redis.del(...keys);
+          }
+        } while (cursor !== "0");
+      }
+    } catch (error) {
+      console.warn("[RedisStore] resetAll failed; failing open:", error);
+    }
+  }
+  async get(key) {
+    const fullKey = `${this.prefix}:${this.storeName}:${key}`;
+    try {
+      const raw3 = await redis.get(fullKey);
+      if (raw3 === null || raw3 === void 0) {
+        return void 0;
+      }
+      const totalHits = Number.parseInt(raw3, 10);
+      const maybePttl = redis.pttl;
+      let resetTime;
+      if (typeof maybePttl === "function") {
+        const ttlMs = await redis.pttl(fullKey);
+        if (Number.isFinite(ttlMs) && ttlMs > 0) {
+          resetTime = new Date(Date.now() + ttlMs);
+        }
+      }
+      return { totalHits: Number.isNaN(totalHits) ? 0 : totalHits, resetTime };
+    } catch (error) {
+      console.warn("[RedisStore] get failed; failing open:", error);
+      return void 0;
+    }
+  }
+  async shutdown() {
+  }
+};
+
+// src/app/middlewares/rateLimiters.ts
+var makeLimiter = (windowMs, baseLimit, message, store, keyType = "ip", skip = () => false) => {
+  const limitFn = (_req, _res) => {
+    if (process.env.NODE_ENV === "test") {
+      const raw3 = Number.parseFloat(
+        process.env.RATE_LIMIT_TEST_MULTIPLIER ?? "100"
+      );
+      if (Number.isFinite(raw3) && raw3 > 0) {
+        return Math.max(1, Math.floor(baseLimit * raw3));
+      }
+    }
+    return baseLimit;
+  };
+  return rateLimit({
+    windowMs,
+    limit: limitFn,
+    standardHeaders: true,
+    legacyHeaders: false,
+    store,
+    skip: (req) => skip(req),
+    passOnStoreError: true,
+    message: {
+      success: false,
+      statusCode: StatusCodes6.TOO_MANY_REQUESTS,
+      message
+    },
+    keyGenerator: (req) => {
+      if (keyType === "user" && req.user?.id) {
+        return req.user.id;
+      }
+      return ipKeyGenerator(req.ip ?? "unknown");
+    }
+  });
+};
+var isInternalRequest = (req) => {
+  const secret = process.env.INTERNAL_API_SECRET;
+  const header = req.headers["x-internal-secret"];
+  if (!secret || typeof header !== "string") return false;
+  const received = Buffer.from(header);
+  const expected = Buffer.from(secret);
+  return received.length === expected.length && timingSafeEqual(received, expected);
+};
+var generalRateLimiter = makeLimiter(
+  15 * 60 * 1e3,
+  300,
+  "Too many requests. Please try again later.",
+  new RedisStore(15 * 60 * 1e3, "general"),
+  "ip",
+  isInternalRequest
+);
+var authRateLimiter = makeLimiter(
+  15 * 60 * 1e3,
+  10,
+  "Too many login attempts. Please try again in 15 minutes.",
+  new RedisStore(15 * 60 * 1e3, "auth")
+);
+var publicRateLimiter = makeLimiter(
+  15 * 60 * 1e3,
+  20,
+  "Too many requests. Please try again later.",
+  new RedisStore(15 * 60 * 1e3, "public")
+);
+var invitationAcceptLimiter = makeLimiter(
+  6e4,
+  10,
+  "Too many invitation actions. Please try again shortly.",
+  new RedisStore(6e4, "invitation"),
+  "ip"
+);
+var attemptSubmitLimiter = makeLimiter(
+  6e4,
+  5,
+  "Too many submission attempts. Please try again shortly.",
+  new RedisStore(6e4, "attempt-submit"),
+  "user"
+);
+var submissionAnswerLimiter = makeLimiter(
+  6e4,
+  60,
+  "Too many answer submissions. Please try again shortly.",
+  new RedisStore(6e4, "submission-answer"),
+  "user"
+);
+var paymentCheckoutLimiter = makeLimiter(
+  6e4,
+  5,
+  "Too many checkout attempts. Please try again shortly.",
+  new RedisStore(6e4, "payment-checkout"),
+  "user"
+);
+var contactLimiter = makeLimiter(
+  60 * 60 * 1e3,
+  5,
+  "Too many messages from this connection. Please try again later.",
+  new RedisStore(60 * 60 * 1e3, "contact"),
+  "ip"
+);
+var accountActionLimiter = makeLimiter(
+  60 * 60 * 1e3,
+  10,
+  "Too many account requests. Please try again later.",
+  new RedisStore(60 * 60 * 1e3, "account-action"),
+  "user"
+);
+var proctoringEventLimiter = makeLimiter(
+  6e4,
+  120,
+  "Too many proctoring events. Please slow down.",
+  new RedisStore(6e4, "proctoring-event"),
+  "user"
+);
+var twoFactorLimiter = makeLimiter(
+  15 * 60 * 1e3,
+  20,
+  "Too many verification attempts. Please try again in 15 minutes.",
+  new RedisStore(15 * 60 * 1e3, "two-factor"),
+  "ip"
+);
+
+// src/app/middlewares/sanitizeBody.ts
+var UNSAFE_KEYS = ["__proto__", "constructor", "prototype"];
+var stripUnsafeKeys = (value) => {
+  if (Array.isArray(value)) return value.map(stripUnsafeKeys);
+  if (value !== null && typeof value === "object") {
+    const clean = {};
+    for (const [key, val] of Object.entries(value)) {
+      if (UNSAFE_KEYS.includes(key)) continue;
+      clean[key] = stripUnsafeKeys(val);
+    }
+    return clean;
+  }
+  return value;
+};
+var sanitizeBody = (req, _res, next) => {
+  if (req.body && typeof req.body === "object") {
+    req.body = stripUnsafeKeys(req.body);
+  }
+  next();
+};
+
+// src/app/modules/webhook/webhook.routes.ts
+import express, { Router } from "express";
+
+// src/app/modules/webhook/webhook.controller.ts
+import { StatusCodes as StatusCodes9 } from "http-status-codes";
+
+// src/app/utils/catchAsync.ts
+var catchAsync = (fn) => {
+  return async (req, res, next) => {
+    try {
+      await fn(req, res, next);
+    } catch (error) {
+      next(error);
+    }
+  };
+};
+
+// src/app/modules/payment/payment.service.ts
+import { StatusCodes as StatusCodes8 } from "http-status-codes";
+
+// src/lib/stripe.ts
+import Stripe from "stripe";
+var stripe = config_default.stripe.secretKey ? new Stripe(config_default.stripe.secretKey) : null;
+var getStripe = () => {
+  if (!stripe) {
+    throw new Error(
+      "Stripe is not configured. Set STRIPE_SECRET_KEY in your .env file."
+    );
+  }
+  return stripe;
+};
+
+// src/app/queryBuilder/constants.ts
+var DEFAULT_PAGE = 1;
+var DEFAULT_LIMIT = 10;
+var DEFAULT_MAX_LIMIT = 100;
+var DEFAULT_SORT_FIELD = "createdAt";
+var DEFAULT_MAX_INCLUDE = 5;
+var DEFAULT_MAX_NESTED_DEPTH = 2;
+var DEFAULT_MAX_SEARCH_LENGTH = 150;
+var RESERVED_QUERY_KEYS = [
+  "page",
+  "limit",
+  "search",
+  "sortBy",
+  "sortOrder",
+  "sort",
+  "fields",
+  "include"
+];
+var OPERATOR_MAP = {
+  eq: "equals",
+  not: "not",
+  gt: "gt",
+  gte: "gte",
+  lt: "lt",
+  lte: "lte",
+  in: "in",
+  notIn: "notIn",
+  contains: "contains",
+  startsWith: "startsWith",
+  endsWith: "endsWith"
+};
+var VALID_OPERATORS = Object.keys(OPERATOR_MAP);
+var OPERATORS_BY_TYPE = {
+  string: ["eq", "not", "in", "notIn", "contains", "startsWith", "endsWith"],
+  number: ["eq", "not", "gt", "gte", "lt", "lte", "in", "notIn"],
+  decimal: ["eq", "not", "gt", "gte", "lt", "lte", "in", "notIn"],
+  date: ["eq", "not", "gt", "gte", "lt", "lte", "in", "notIn"],
+  boolean: ["eq", "not"],
+  enum: ["eq", "not", "in", "notIn"]
+};
+var UNSAFE_KEYS2 = ["__proto__", "constructor", "prototype"];
+var DATE_STRING_PATTERN = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:\d{2})?)?$/;
+
+// src/app/queryBuilder/marge.ts
+var buildNestedField = (path2, condition) => {
+  const segments = path2.split(".");
+  for (const segment of segments) {
+    if (UNSAFE_KEYS2.includes(segment)) return {};
+  }
+  return segments.reduceRight(
+    (acc, part) => ({ [part]: acc }),
+    condition
+  );
+};
+var deepMerge = (target, source) => {
+  for (const [key, value] of Object.entries(source)) {
+    if (UNSAFE_KEYS2.includes(key)) continue;
+    const isPlainObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+    if (isPlainObj(value) && isPlainObj(target[key])) {
+      deepMerge(
+        target[key],
+        value
+      );
+    } else {
+      target[key] = value;
+    }
+  }
+  return target;
+};
+var buildWhereFromFilters = (filters) => {
+  const grouped = {};
+  for (const { field, operator, value } of filters) {
+    const prismaOp = OPERATOR_MAP[operator];
+    if (!prismaOp) continue;
+    grouped[field] = { ...grouped[field] ?? {}, [prismaOp]: value };
+  }
+  const where = {};
+  for (const [field, condition] of Object.entries(grouped)) {
+    deepMerge(where, buildNestedField(field, condition));
+  }
+  return where;
+};
+var buildSearchWhere = (search, searchableFields = []) => {
+  if (!search || searchableFields.length === 0) return void 0;
+  return {
+    OR: searchableFields.map(
+      (field) => buildNestedField(field, { contains: search, mode: "insensitive" })
+    )
+  };
+};
+var buildWhere = (parsed2, config3, tenantScope) => {
+  const conditions = [];
+  const filterWhere = buildWhereFromFilters(parsed2.filters);
+  if (Object.keys(filterWhere).length > 0) conditions.push(filterWhere);
+  const searchWhere = buildSearchWhere(parsed2.search, config3.searchableFields);
+  if (searchWhere) conditions.push(searchWhere);
+  if (config3.softDelete) conditions.push({ deletedAt: null });
+  if (tenantScope) conditions.push(tenantScope);
+  if (conditions.length === 0) return {};
+  if (conditions.length === 1) return conditions[0] ?? {};
+  return { AND: conditions };
+};
+var buildOrderBy = (parsed2, config3) => {
+  if (parsed2.sorts.length === 0) {
+    return [{ [config3.defaultSortField ?? DEFAULT_SORT_FIELD]: "desc" }];
+  }
+  return parsed2.sorts.map(({ field, order }) => buildNestedField(field, order));
+};
+var buildDynamicSelect = (fields) => {
+  if (!fields || fields.length === 0) return void 0;
+  const safeFields = fields.filter((f) => !UNSAFE_KEYS2.includes(f));
+  return safeFields.length > 0 ? Object.fromEntries(safeFields.map((f) => [f, true])) : void 0;
+};
+var buildInclude = (requested, defaultInclude) => {
+  const include = { ...defaultInclude ?? {} };
+  for (const relation of requested ?? []) {
+    if (UNSAFE_KEYS2.includes(relation)) continue;
+    include[relation] = true;
+  }
+  return Object.keys(include).length > 0 ? include : void 0;
+};
+var buildSelectOrInclude = (parsed2, config3) => {
+  const dynamicSelect = buildDynamicSelect(parsed2.fields);
+  if (dynamicSelect) return { select: dynamicSelect };
+  if (config3.defaultSelect) return { select: config3.defaultSelect };
+  const include = buildInclude(parsed2.include, config3.defaultInclude);
+  return include ? { include } : {};
+};
+var buildPrismaArgs = (parsed2, config3, tenantScope) => {
+  const { select, include } = buildSelectOrInclude(parsed2, config3);
+  return {
+    where: buildWhere(parsed2, config3, tenantScope),
+    orderBy: buildOrderBy(parsed2, config3),
+    skip: parsed2.skip,
+    take: parsed2.limit,
+    ...select && { select },
+    ...include && { include }
+  };
+};
+
+// src/app/queryBuilder/parser.ts
+import { StatusCodes as StatusCodes7 } from "http-status-codes";
+var getBaseType = (config3) => typeof config3 === "string" ? config3 : "enum";
+var assertValidDepth = (field, maxDepth) => {
+  if (field.split(".").length > maxDepth) {
+    throw new appError_default(
+      StatusCodes7.BAD_REQUEST,
+      `Field "${field}" exceeds the maximum allowed nesting depth of ${maxDepth}.`
+    );
+  }
+};
+var assertOperatorAllowedForType = (field, operator, type) => {
+  const allowed = OPERATORS_BY_TYPE[type] ?? [];
+  if (!allowed.includes(operator)) {
+    throw new appError_default(
+      StatusCodes7.BAD_REQUEST,
+      `Operator "${operator}" is not allowed on field "${field}" (type: ${type}).`
+    );
+  }
+};
+var isValidCalendarDate = (raw3) => {
+  const datePart = raw3.split("T")[0];
+  const match = datePart?.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+};
+var castSingleValue = (raw3, field, config3) => {
+  if (typeof config3 === "object" && config3.type === "enum") {
+    const validValues = Object.values(config3.enum);
+    if (!validValues.includes(raw3)) {
+      throw new appError_default(
+        StatusCodes7.BAD_REQUEST,
+        `Invalid value "${raw3}" for "${field}". Expected one of: ${validValues.join(", ")}.`
+      );
+    }
+    return raw3;
+  }
+  switch (config3) {
+    case "number": {
+      const num = Number(raw3);
+      if (raw3.trim() === "" || Number.isNaN(num)) {
+        throw new appError_default(
+          StatusCodes7.BAD_REQUEST,
+          `Invalid number value for "${field}": "${raw3}"`
+        );
+      }
+      return num;
+    }
+    case "decimal": {
+      try {
+        return new prismaNamespace_exports.Decimal(raw3);
+      } catch {
+        throw new appError_default(
+          StatusCodes7.BAD_REQUEST,
+          `Invalid decimal value for "${field}": "${raw3}"`
+        );
+      }
+    }
+    case "boolean": {
+      if (raw3 !== "true" && raw3 !== "false") {
+        throw new appError_default(
+          StatusCodes7.BAD_REQUEST,
+          `"${field}" must be "true" or "false".`
+        );
+      }
+      return raw3 === "true";
+    }
+    case "date": {
+      if (!DATE_STRING_PATTERN.test(raw3)) {
+        throw new appError_default(
+          StatusCodes7.BAD_REQUEST,
+          `Invalid date value for "${field}": "${raw3}". Expected format YYYY-MM-DD.`
+        );
+      }
+      if (!isValidCalendarDate(raw3)) {
+        throw new appError_default(
+          StatusCodes7.BAD_REQUEST,
+          `"${raw3}" is not a real calendar date for "${field}".`
+        );
+      }
+      const date = new Date(raw3);
+      if (Number.isNaN(date.getTime())) {
+        throw new appError_default(
+          StatusCodes7.BAD_REQUEST,
+          `Invalid date value for "${field}": "${raw3}"`
+        );
+      }
+      return date;
+    }
+    default:
+      return raw3;
+  }
+};
+var castValue = (raw3, field, config3, operator) => {
+  const str3 = String(raw3);
+  if (operator === "in" || operator === "notIn") {
+    return str3.split(",").map((v) => castSingleValue(v.trim(), field, config3));
+  }
+  return castSingleValue(str3, field, config3);
+};
+var parsePagination = (query, maxLimit) => {
+  const page = Math.max(1, Number(query.page) || DEFAULT_PAGE);
+  const requestedLimit = Number(query.limit) || DEFAULT_LIMIT;
+  const limit = Math.min(Math.max(1, requestedLimit), maxLimit);
+  const skip = (page - 1) * limit;
+  return { page, limit, skip };
+};
+var parseFilters = (query, config3, maxNestedDepth) => {
+  const filters = [];
+  for (const [key, rawValue] of Object.entries(query)) {
+    if (RESERVED_QUERY_KEYS.includes(key)) continue;
+    const fieldConfig = config3.filterableFields[key];
+    if (!fieldConfig) continue;
+    assertValidDepth(key, maxNestedDepth);
+    const baseType = getBaseType(fieldConfig);
+    if (rawValue !== null && typeof rawValue === "object" && !Array.isArray(rawValue)) {
+      for (const [op, val] of Object.entries(
+        rawValue
+      )) {
+        if (!VALID_OPERATORS.includes(op)) continue;
+        assertOperatorAllowedForType(key, op, baseType);
+        filters.push({
+          field: key,
+          operator: op,
+          value: castValue(val, key, fieldConfig, op)
+        });
+      }
+    } else {
+      assertOperatorAllowedForType(key, "eq", baseType);
+      filters.push({
+        field: key,
+        operator: "eq",
+        value: castValue(rawValue, key, fieldConfig, "eq")
+      });
+    }
+  }
+  return filters;
+};
+var parseSort = (query, config3, maxNestedDepth) => {
+  const sorts = [];
+  const seenFields = /* @__PURE__ */ new Set();
+  const pushSort = (field, order) => {
+    if (seenFields.has(field)) return;
+    seenFields.add(field);
+    assertValidDepth(field, maxNestedDepth);
+    sorts.push({ field, order });
+  };
+  if (typeof query.sort === "string" && query.sort.trim() !== "") {
+    for (const raw3 of query.sort.split(",")) {
+      const trimmed = raw3.trim();
+      const desc = trimmed.startsWith("-");
+      const field = desc ? trimmed.slice(1) : trimmed;
+      if (config3.sortableFields.includes(field))
+        pushSort(field, desc ? "desc" : "asc");
+    }
+    return sorts;
+  }
+  if (typeof query.sortBy === "string" && config3.sortableFields.includes(query.sortBy)) {
+    pushSort(query.sortBy, query.sortOrder === "desc" ? "desc" : "asc");
+  }
+  return sorts;
+};
+var parseCsvWhitelisted = (value, allowed, maxItems) => {
+  if (typeof value !== "string" || value.trim() === "") return void 0;
+  const requested = value.split(",").map((v) => v.trim()).filter(Boolean);
+  const filtered = allowed ? requested.filter((f) => allowed.includes(f)) : requested;
+  const unique = Array.from(new Set(filtered));
+  if (unique.length === 0) return void 0;
+  if (maxItems && unique.length > maxItems) {
+    throw new appError_default(
+      StatusCodes7.BAD_REQUEST,
+      `A maximum of ${maxItems} items can be requested at once.`
+    );
+  }
+  return unique;
+};
+var parseSearch = (query, maxSearchLength) => {
+  if (typeof query.search !== "string") return void 0;
+  const trimmed = query.search.trim();
+  if (trimmed === "") return void 0;
+  if (trimmed.length > maxSearchLength) {
+    throw new appError_default(
+      StatusCodes7.BAD_REQUEST,
+      `Search query is too long (max ${maxSearchLength} characters).`
+    );
+  }
+  return trimmed;
+};
+var parseQuery = (query, config3) => {
+  const maxLimit = config3.maxLimit ?? DEFAULT_MAX_LIMIT;
+  const maxInclude = config3.maxInclude ?? DEFAULT_MAX_INCLUDE;
+  const maxNestedDepth = config3.maxNestedDepth ?? DEFAULT_MAX_NESTED_DEPTH;
+  const maxSearchLength = config3.maxSearchLength ?? DEFAULT_MAX_SEARCH_LENGTH;
+  const { page, limit, skip } = parsePagination(query, maxLimit);
+  const search = parseSearch(query, maxSearchLength);
+  const fields = parseCsvWhitelisted(query.fields, config3.selectableFields);
+  const include = parseCsvWhitelisted(
+    query.include,
+    config3.includableRelations,
+    maxInclude
+  );
+  return {
+    page,
+    limit,
+    skip,
+    ...search !== void 0 && { search },
+    filters: parseFilters(query, config3, maxNestedDepth),
+    sorts: parseSort(query, config3, maxNestedDepth),
+    ...fields !== void 0 && { fields },
+    ...include !== void 0 && { include }
+  };
+};
+
+// src/app/queryBuilder/queryBuilder.ts
+var validateConfig = (config3) => {
+  for (const field of config3.selectableFields ?? []) {
+    if (field.includes(".")) {
+      throw new Error(
+        `QueryConfig.selectableFields: "${field}" is invalid \u2014 nested field selection is not supported.`
+      );
+    }
+  }
+  for (const relation of config3.includableRelations ?? []) {
+    if (relation.includes(".")) {
+      throw new Error(
+        `QueryConfig.includableRelations: "${relation}" is invalid \u2014 only direct relation names are supported.`
+      );
+    }
+  }
+  for (const field of config3.searchableFields ?? []) {
+    const baseField = field.includes(".") ? void 0 : field;
+    if (baseField && config3.filterableFields[baseField]) {
+      const fieldConfig = config3.filterableFields[baseField];
+      const baseType = typeof fieldConfig === "string" ? fieldConfig : "enum";
+      if (baseType !== "string") {
+        throw new Error(
+          `QueryConfig.searchableFields: "${field}" is type "${baseType}", but search uses "contains" which only works on strings.`
+        );
+      }
+    }
+  }
+};
+var QueryBuilder = class {
+  delegate;
+  config;
+  constructor(delegate, config3) {
+    const merged = {
+      maxLimit: DEFAULT_MAX_LIMIT,
+      maxInclude: DEFAULT_MAX_INCLUDE,
+      maxNestedDepth: DEFAULT_MAX_NESTED_DEPTH,
+      maxSearchLength: DEFAULT_MAX_SEARCH_LENGTH,
+      defaultSortField: DEFAULT_SORT_FIELD,
+      ...config3
+    };
+    validateConfig(merged);
+    this.delegate = delegate;
+    this.config = merged;
+  }
+  parse(rawQuery) {
+    return parseQuery(rawQuery, this.config);
+  }
+  buildArgs(parsed2, tenantScope) {
+    return buildPrismaArgs(parsed2, this.config, tenantScope);
+  }
+  buildMeta(parsed2, total) {
+    return {
+      page: parsed2.page,
+      limit: parsed2.limit,
+      total,
+      totalPage: Math.max(1, Math.ceil(total / parsed2.limit))
+    };
+  }
+  async execute(rawQuery, tenantScope) {
+    const parsed2 = this.parse(rawQuery);
+    const args = this.buildArgs(parsed2, tenantScope);
+    const where = args.where;
+    const [data, total] = await Promise.all([
+      this.delegate.findMany({ ...args, where }),
+      this.delegate.count({ where })
+    ]);
+    return { data, meta: this.buildMeta(parsed2, total) };
+  }
+};
+
+// src/app/modules/payment/payment.const.ts
+var PLAN_PRICING = {
+  FREE: { amountMinor: 0, currency: "usd" },
+  PRO: { amountMinor: 2900, currency: "usd" },
+  ENTERPRISE: { amountMinor: 9900, currency: "usd" }
+};
+var PAYMENT_SELECT = {
+  id: true,
+  userId: true,
+  companyId: true,
+  subscriptionId: true,
+  provider: true,
+  status: true,
+  amountMinor: true,
+  currency: true,
+  transactionId: true,
+  providerPaymentId: true,
+  paidAt: true,
+  failedAt: true,
+  createdAt: true
+};
+
+// src/app/modules/payment/payment.service.ts
+var paymentQueryBuilder = new QueryBuilder(prisma.payment, {
+  searchableFields: [],
+  filterableFields: {
+    status: {
+      type: "enum",
+      enum: {
+        PENDING: "PENDING",
+        PROCESSING: "PROCESSING",
+        PAID: "PAID",
+        FAILED: "FAILED",
+        CANCELLED: "CANCELLED",
+        REFUNDED: "REFUNDED"
+      }
+    },
+    provider: {
+      type: "enum",
+      enum: {
+        STRIPE: "STRIPE",
+        BKASH: "BKASH",
+        SSLCOMMERZ: "SSLCOMMERZ"
+      }
+    },
+    createdAt: "date"
+  },
+  sortableFields: ["createdAt", "amountMinor"],
+  selectableFields: Object.keys(PAYMENT_SELECT),
+  defaultSelect: PAYMENT_SELECT,
+  defaultSortField: "createdAt"
+});
+var PLAN_RANK = {
+  FREE: 0,
+  PRO: 1,
+  ENTERPRISE: 2
+};
+var createCheckoutSession = async (userId, companyId, payload) => {
+  const pricing = PLAN_PRICING[payload.plan];
+  if (!pricing) {
+    throw new appError_default(
+      StatusCodes8.BAD_REQUEST,
+      `Invalid subscription plan: ${payload.plan}`
+    );
+  }
+  const stripe2 = getStripe();
+  const clientUrl = config_default.app.clientUrl.split(",")[0]?.trim() || "http://localhost:3000";
+  const existingSubscription = await prisma.subscription.findUnique({
+    where: { companyId }
+  });
+  const stillActive = existingSubscription?.status === "ACTIVE" && (!existingSubscription.currentPeriodEnd || existingSubscription.currentPeriodEnd > /* @__PURE__ */ new Date());
+  if (existingSubscription && stillActive && PLAN_RANK[existingSubscription.plan] >= PLAN_RANK[payload.plan]) {
+    throw new appError_default(
+      StatusCodes8.CONFLICT,
+      `Your company is already on the ${existingSubscription.plan} plan.`
+    );
+  }
+  if (payload.plan === "FREE") {
+    throw new appError_default(
+      StatusCodes8.BAD_REQUEST,
+      "The FREE plan does not require checkout."
+    );
+  }
+  const payment = await prisma.payment.create({
+    data: {
+      userId,
+      companyId,
+      provider: "STRIPE",
+      status: "PENDING",
+      amountMinor: pricing.amountMinor,
+      currency: pricing.currency.toUpperCase(),
+      metadata: {
+        plan: payload.plan
+      }
+    }
+  });
+  try {
+    const session = await stripe2.checkout.sessions.create({
+      mode: "payment",
+      payment_method_types: ["card"],
+      line_items: [
+        {
+          price_data: {
+            currency: pricing.currency,
+            product_data: {
+              name: `${payload.plan} plan subscription`
+            },
+            unit_amount: pricing.amountMinor
+          },
+          quantity: 1
+        }
+      ],
+      success_url: `${clientUrl}/billing/success?paymentId=${payment.id}`,
+      cancel_url: `${clientUrl}/billing/cancel?paymentId=${payment.id}`,
+      metadata: {
+        paymentId: payment.id,
+        companyId,
+        plan: payload.plan
+      },
+      payment_intent_data: {
+        metadata: {
+          paymentId: payment.id,
+          companyId,
+          plan: payload.plan
+        }
+      }
+    });
+    if (!session.url) {
+      await prisma.payment.update({
+        where: { id: payment.id },
+        data: {
+          status: "FAILED",
+          failedAt: /* @__PURE__ */ new Date()
+        }
+      });
+      throw new appError_default(
+        StatusCodes8.INTERNAL_SERVER_ERROR,
+        "Stripe checkout URL was not generated."
+      );
+    }
+    await prisma.payment.update({
+      where: { id: payment.id },
+      data: {
+        providerPaymentId: session.id
+      }
+    });
+    return {
+      paymentId: payment.id,
+      checkoutUrl: session.url
+    };
+  } catch (error) {
+    if (error instanceof appError_default) {
+      throw error;
+    }
+    await prisma.payment.update({
+      where: { id: payment.id },
+      data: {
+        status: "FAILED",
+        failedAt: /* @__PURE__ */ new Date()
+      }
+    });
+    throw new appError_default(
+      StatusCodes8.BAD_GATEWAY,
+      "Unable to create Stripe checkout session."
+    );
+  }
+};
+var markCheckoutPaid = async (session) => {
+  const paymentId = session.metadata?.paymentId;
+  if (!paymentId) return false;
+  const companyId = session.metadata?.companyId;
+  const plan = session.metadata?.plan;
+  const paymentIntent = session.payment_intent;
+  const transactionId = typeof paymentIntent === "string" ? paymentIntent : paymentIntent?.id;
+  return prisma.$transaction(async (tx) => {
+    const claimed = await tx.payment.updateMany({
+      where: {
+        id: paymentId,
+        status: { in: ["PENDING", "PROCESSING", "FAILED"] }
+      },
+      data: {
+        status: "PAID",
+        paidAt: /* @__PURE__ */ new Date(),
+        failedAt: null,
+        ...transactionId ? { transactionId } : {}
+      }
+    });
+    if (claimed.count === 0) return false;
+    const payment = await tx.payment.findUniqueOrThrow({
+      where: { id: paymentId }
+    });
+    if (companyId && plan) {
+      const currentPeriodStart = /* @__PURE__ */ new Date();
+      const currentPeriodEnd = new Date(
+        currentPeriodStart.getTime() + 30 * 24 * 60 * 60 * 1e3
+      );
+      const subscription = await tx.subscription.upsert({
+        where: { companyId },
+        update: {
+          plan,
+          status: "ACTIVE",
+          currentPeriodStart,
+          currentPeriodEnd,
+          cancelAtPeriodEnd: false
+        },
+        create: {
+          companyId,
+          plan,
+          status: "ACTIVE",
+          currentPeriodStart,
+          currentPeriodEnd,
+          cancelAtPeriodEnd: false
+        }
+      });
+      await tx.payment.update({
+        where: { id: paymentId },
+        data: { subscriptionId: subscription.id }
+      });
+    }
+    await tx.notification.create({
+      data: {
+        userId: payment.userId,
+        title: "Payment Successful",
+        message: `Your payment of ${(Number(payment.amountMinor) / 100).toFixed(2)} ${payment.currency} was successful.`,
+        type: "PAYMENT_SUCCESS"
+      }
+    });
+    return true;
+  });
+};
+var markCheckoutFailed = async (paymentId) => {
+  const claimed = await prisma.payment.updateMany({
+    where: { id: paymentId, status: { in: ["PENDING", "PROCESSING"] } },
+    data: { status: "FAILED", failedAt: /* @__PURE__ */ new Date() }
+  });
+  if (claimed.count === 0) return;
+  const payment = await prisma.payment.findUnique({
+    where: { id: paymentId },
+    select: { userId: true }
+  });
+  if (!payment) return;
+  await prisma.notification.create({
+    data: {
+      userId: payment.userId,
+      title: "Payment Failed",
+      message: "Your payment could not be completed. Please try again.",
+      type: "PAYMENT_FAILED"
+    }
+  });
+};
+var handleStripeWebhook = async (rawBody, signature) => {
+  const stripe2 = getStripe();
+  if (!config_default.stripe.webhookSecret) {
+    throw new appError_default(
+      StatusCodes8.SERVICE_UNAVAILABLE,
+      "Stripe webhook secret is not configured."
+    );
+  }
+  if (!signature) {
+    throw new appError_default(
+      StatusCodes8.BAD_REQUEST,
+      "Missing Stripe signature header."
+    );
+  }
+  let event;
+  try {
+    event = stripe2.webhooks.constructEvent(
+      rawBody,
+      signature,
+      config_default.stripe.webhookSecret
+    );
+  } catch {
+    throw new appError_default(
+      StatusCodes8.BAD_REQUEST,
+      "Invalid Stripe webhook signature."
+    );
+  }
+  const existingEvent = await prisma.paymentWebhookEvent.findUnique({
+    where: {
+      provider_eventId: {
+        provider: "STRIPE",
+        eventId: event.id
+      }
+    }
+  });
+  if (existingEvent?.processed) {
+    return {
+      received: true,
+      alreadyProcessed: true
+    };
+  }
+  await prisma.paymentWebhookEvent.upsert({
+    where: {
+      provider_eventId: {
+        provider: "STRIPE",
+        eventId: event.id
+      }
+    },
+    update: {},
+    create: {
+      provider: "STRIPE",
+      eventId: event.id,
+      eventType: event.type,
+      payload: JSON.parse(JSON.stringify(event))
+    }
+  });
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object;
+    if (session.payment_status === "paid") {
+      await markCheckoutPaid(session);
+    }
+  } else if (event.type === "checkout.session.expired" || event.type === "payment_intent.payment_failed") {
+    const object = event.data.object;
+    const paymentId = object.metadata?.paymentId;
+    if (paymentId) {
+      await markCheckoutFailed(paymentId);
+    }
+  }
+  await prisma.paymentWebhookEvent.update({
+    where: {
+      provider_eventId: {
+        provider: "STRIPE",
+        eventId: event.id
+      }
+    },
+    data: {
+      processed: true,
+      processedAt: /* @__PURE__ */ new Date()
+    }
+  });
+  return {
+    received: true
+  };
+};
+var getMyPayments = async (userId, query) => {
+  return paymentQueryBuilder.execute(query, {
+    userId
+  });
+};
+var getAllPayments = async (query) => {
+  return paymentQueryBuilder.execute(query);
+};
+var getPaymentById = async (id, requester) => {
+  const payment = await prisma.payment.findUnique({
+    where: {
+      id
+    },
+    select: PAYMENT_SELECT
+  });
+  if (!payment) {
+    throw new appError_default(
+      StatusCodes8.NOT_FOUND,
+      "Payment not found."
+    );
+  }
+  if (requester.role !== "ADMIN" && payment.userId !== requester.id) {
+    throw new appError_default(
+      StatusCodes8.FORBIDDEN,
+      "You don't have permission to view this payment."
+    );
+  }
+  return payment;
+};
+var syncPayment = async (id, requester) => {
+  const payment = await getPaymentById(id, requester);
+  if (payment.status !== "PENDING" && payment.status !== "PROCESSING") {
+    return payment;
+  }
+  if (!payment.providerPaymentId) {
+    return payment;
+  }
+  let session;
+  try {
+    session = await getStripe().checkout.sessions.retrieve(
+      payment.providerPaymentId
+    );
+  } catch {
+    throw new appError_default(
+      StatusCodes8.BAD_GATEWAY,
+      "Couldn't check the payment with Stripe. Please try again."
+    );
+  }
+  if (session.payment_status === "paid") {
+    await markCheckoutPaid(session);
+  } else if (session.status === "expired") {
+    await markCheckoutFailed(payment.id);
+  }
+  return getPaymentById(id, requester);
+};
+var paymentService = {
+  createCheckoutSession,
+  handleStripeWebhook,
+  getMyPayments,
+  getAllPayments,
+  getPaymentById,
+  syncPayment
+};
+
+// src/app/modules/webhook/webhook.controller.ts
+var handleStripeWebhook2 = catchAsync(async (req, res) => {
+  const signature = req.headers["stripe-signature"];
+  const result = await paymentService.handleStripeWebhook(
+    req.body,
+    signature
+  );
+  res.status(StatusCodes9.OK).json({
+    success: true,
+    message: "Webhook processed.",
+    data: result
+  });
+});
+var webhookController = {
+  handleStripeWebhook: handleStripeWebhook2
+};
+
+// src/app/modules/webhook/webhook.routes.ts
+var router = Router();
+router.post(
+  "/stripe",
+  express.raw({ type: "application/json" }),
+  webhookController.handleStripeWebhook
+);
+var webhookRoutes = router;
+
+// src/app/routes/index.ts
+import { Router as Router21 } from "express";
+
+// src/app/modules/admin/admin.routes.ts
+import { Router as Router2 } from "express";
+
+// src/app/middlewares/requireAuth.ts
+import { fromNodeHeaders as fromNodeHeaders2 } from "better-auth/node";
+import { StatusCodes as StatusCodes10 } from "http-status-codes";
+var requireAuth = catchAsync(
+  async (req, _res, next) => {
+    const session = await auth.api.getSession({
+      headers: fromNodeHeaders2(req.headers)
+    });
     if (!session?.user) {
       throw new appError_default(
-        StatusCodes9.UNAUTHORIZED,
+        StatusCodes10.UNAUTHORIZED,
         "You are not logged in. Please log in to access this resource."
       );
     }
@@ -3413,7 +3477,7 @@ var requireAuth = catchAsync(
     });
     if (!account || account.deletedAt || account.status === "SUSPENDED") {
       throw new appError_default(
-        StatusCodes9.FORBIDDEN,
+        StatusCodes10.FORBIDDEN,
         "This account is suspended or has been deleted."
       );
     }
@@ -3425,7 +3489,7 @@ var optionalAuth = catchAsync(
   async (req, _res, next) => {
     try {
       const session = await auth.api.getSession({
-        headers: fromNodeHeaders(req.headers)
+        headers: fromNodeHeaders2(req.headers)
       });
       if (session?.user) {
         const account = await prisma.user.findUnique({
@@ -3445,11 +3509,11 @@ var requireRole = (...roles) => {
   return catchAsync(
     async (req, _res, next) => {
       if (!req.user) {
-        throw new appError_default(StatusCodes9.UNAUTHORIZED, "You are not logged in.");
+        throw new appError_default(StatusCodes10.UNAUTHORIZED, "You are not logged in.");
       }
       if (roles.length && !roles.includes(req.user.role)) {
         throw new appError_default(
-          StatusCodes9.FORBIDDEN,
+          StatusCodes10.FORBIDDEN,
           "You don't have permission to access this resource."
         );
       }
@@ -3459,7 +3523,7 @@ var requireRole = (...roles) => {
 };
 
 // src/app/modules/admin/admin.controller.ts
-import { StatusCodes as StatusCodes10 } from "http-status-codes";
+import { StatusCodes as StatusCodes11 } from "http-status-codes";
 
 // src/app/modules/admin/admin.const.ts
 var AUDIT_LOG_SELECT = {
@@ -3586,7 +3650,7 @@ var adminService = {
 // src/app/modules/admin/admin.controller.ts
 var getDashboardStats2 = catchAsync(async (_req, res) => {
   const stats = await adminService.getDashboardStats();
-  res.status(StatusCodes10.OK).json({
+  res.status(StatusCodes11.OK).json({
     success: true,
     message: "Dashboard stats retrieved successfully.",
     data: stats
@@ -3596,7 +3660,7 @@ var getAuditLogs2 = catchAsync(async (req, res) => {
   const result = await adminService.getAuditLogs(
     req.query
   );
-  res.status(StatusCodes10.OK).json({
+  res.status(StatusCodes11.OK).json({
     success: true,
     message: "Audit logs retrieved successfully.",
     meta: result.meta,
@@ -3619,14 +3683,14 @@ var adminRoutes = router2;
 import { Router as Router3 } from "express";
 
 // src/app/middlewares/validateRequest.ts
-import { StatusCodes as StatusCodes11 } from "http-status-codes";
+import { StatusCodes as StatusCodes12 } from "http-status-codes";
 var validateRequest = (schema) => {
   return async (req, _res, next) => {
     const result = await schema.safeParseAsync(req.body ?? {});
     if (!result.success) {
       return next(
         new appError_default(
-          StatusCodes11.BAD_REQUEST,
+          StatusCodes12.BAD_REQUEST,
           result.error.issues[0]?.message ?? "Validation failed.",
           "VALIDATION_ERROR",
           result.error.issues.map((issue) => ({
@@ -3642,17 +3706,17 @@ var validateRequest = (schema) => {
 };
 
 // src/app/modules/assessment/assessment.controller.ts
-import { StatusCodes as StatusCodes16 } from "http-status-codes";
+import { StatusCodes as StatusCodes17 } from "http-status-codes";
 
 // src/lib/getCompanyIdForUser.ts
-import { StatusCodes as StatusCodes12 } from "http-status-codes";
+import { StatusCodes as StatusCodes13 } from "http-status-codes";
 async function getCompanyIdForUser(user, _req) {
   if (user.role === "ADMIN") {
     return void 0;
   }
   if (user.role === "CANDIDATE") {
     throw new appError_default(
-      StatusCodes12.FORBIDDEN,
+      StatusCodes13.FORBIDDEN,
       "Candidates cannot access company-scoped resources"
     );
   }
@@ -3662,7 +3726,7 @@ async function getCompanyIdForUser(user, _req) {
   });
   if (!company) {
     throw new appError_default(
-      StatusCodes12.FORBIDDEN,
+      StatusCodes13.FORBIDDEN,
       "No company associated with this user"
     );
   }
@@ -3670,7 +3734,7 @@ async function getCompanyIdForUser(user, _req) {
 }
 
 // src/app/modules/assessment/assessment.service.ts
-import { StatusCodes as StatusCodes15 } from "http-status-codes";
+import { StatusCodes as StatusCodes16 } from "http-status-codes";
 
 // src/lib/prismaTenantScope.ts
 function withTenantScope(where, companyId) {
@@ -3687,7 +3751,7 @@ function withTenantScope(where, companyId) {
 }
 
 // src/app/utils/planLimits.ts
-import { StatusCodes as StatusCodes13 } from "http-status-codes";
+import { StatusCodes as StatusCodes14 } from "http-status-codes";
 var PLAN_LIMITS = {
   FREE: { maxAssessments: 2, maxInvitationsPer30Days: 20 },
   PRO: { maxAssessments: 20, maxInvitationsPer30Days: 200 },
@@ -3745,7 +3809,7 @@ var assertCanCreateAssessment = async (companyId) => {
   const used = await countAssessments(companyId);
   if (used >= limit) {
     throw new appError_default(
-      StatusCodes13.PAYMENT_REQUIRED,
+      StatusCodes14.PAYMENT_REQUIRED,
       `Your ${plan} plan allows up to ${limit} assessments. Upgrade your plan to create more.`
     );
   }
@@ -3758,25 +3822,25 @@ var assertCanInvite = async (companyId, count) => {
   const remaining = Math.max(limit - used, 0);
   if (count > remaining) {
     throw new appError_default(
-      StatusCodes13.PAYMENT_REQUIRED,
+      StatusCodes14.PAYMENT_REQUIRED,
       `Your ${plan} plan allows ${limit} invitations per 30 days, and you have ${remaining} left. Upgrade your plan to invite more candidates.`
     );
   }
 };
 
 // src/app/utils/assertCompanyVerified.ts
-import { StatusCodes as StatusCodes14 } from "http-status-codes";
+import { StatusCodes as StatusCodes15 } from "http-status-codes";
 var assertCompanyVerified = async (companyId) => {
   const company = await prisma.company.findFirst({
     where: { id: companyId, deletedAt: null },
     select: { isVerified: true }
   });
   if (!company) {
-    throw new appError_default(StatusCodes14.NOT_FOUND, "Company not found.");
+    throw new appError_default(StatusCodes15.NOT_FOUND, "Company not found.");
   }
   if (!company.isVerified) {
     throw new appError_default(
-      StatusCodes14.FORBIDDEN,
+      StatusCodes15.FORBIDDEN,
       "Your company must be verified by an admin before you can do this."
     );
   }
@@ -3915,7 +3979,7 @@ var assertProblemsBelongToCompany = async (companyId, problemIds) => {
   });
   if (found.length !== new Set(problemIds).size) {
     throw new appError_default(
-      StatusCodes15.BAD_REQUEST,
+      StatusCodes16.BAD_REQUEST,
       "One or more problems were not found in your company's problem bank."
     );
   }
@@ -3990,7 +4054,7 @@ var getAssessmentById = async (id, companyId) => {
     select: ASSESSMENT_DETAIL_SELECT
   });
   if (!assessment) {
-    throw new appError_default(StatusCodes15.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(StatusCodes16.NOT_FOUND, "Assessment not found.");
   }
   return assessment;
 };
@@ -4005,11 +4069,11 @@ var updateAssessment = async (id, companyId, payload) => {
     ) ?? {}
   });
   if (!existing) {
-    throw new appError_default(StatusCodes15.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(StatusCodes16.NOT_FOUND, "Assessment not found.");
   }
   if (existing.status !== "DRAFT") {
     throw new appError_default(
-      StatusCodes15.CONFLICT,
+      StatusCodes16.CONFLICT,
       "Only DRAFT assessments can be edited. Close this one and create a new assessment instead."
     );
   }
@@ -4025,7 +4089,7 @@ var updateAssessment = async (id, companyId, payload) => {
     );
     if (marksSum !== effectiveTotalMarks) {
       throw new appError_default(
-        StatusCodes15.BAD_REQUEST,
+        StatusCodes16.BAD_REQUEST,
         `Sum of problem marks (${marksSum}) must equal totalMarks (${effectiveTotalMarks}).`
       );
     }
@@ -4033,7 +4097,7 @@ var updateAssessment = async (id, companyId, payload) => {
   const effectivePassingMarks = payload.passingMarks ?? existing.passingMarks;
   if (effectivePassingMarks > effectiveTotalMarks) {
     throw new appError_default(
-      StatusCodes15.BAD_REQUEST,
+      StatusCodes16.BAD_REQUEST,
       "Passing marks cannot exceed total marks."
     );
   }
@@ -4041,7 +4105,7 @@ var updateAssessment = async (id, companyId, payload) => {
   const effectiveEndAt = payload.endAt !== void 0 ? payload.endAt : existing.endAt;
   if (effectiveStartAt && effectiveEndAt && effectiveEndAt <= effectiveStartAt) {
     throw new appError_default(
-      StatusCodes15.BAD_REQUEST,
+      StatusCodes16.BAD_REQUEST,
       "The end time must be after the start time."
     );
   }
@@ -4087,7 +4151,7 @@ var publishAssessment = async (id, companyId) => {
     }
   });
   if (!assessment) {
-    throw new appError_default(StatusCodes15.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(StatusCodes16.NOT_FOUND, "Assessment not found.");
   }
   if (assessment.status === "PUBLISHED" || assessment.status === "ACTIVE") {
     return prisma.assessment.findUniqueOrThrow({
@@ -4099,14 +4163,14 @@ var publishAssessment = async (id, companyId) => {
   }
   if (assessment.status !== "DRAFT") {
     throw new appError_default(
-      StatusCodes15.CONFLICT,
+      StatusCodes16.CONFLICT,
       `Cannot publish an assessment with status ${assessment.status}.`
     );
   }
   await assertCompanyVerified(companyId);
   if (assessment.assessmentProblems.length === 0) {
     throw new appError_default(
-      StatusCodes15.BAD_REQUEST,
+      StatusCodes16.BAD_REQUEST,
       "Add at least one problem before publishing."
     );
   }
@@ -4116,7 +4180,7 @@ var publishAssessment = async (id, companyId) => {
   );
   if (marksSum !== assessment.totalMarks) {
     throw new appError_default(
-      StatusCodes15.BAD_REQUEST,
+      StatusCodes16.BAD_REQUEST,
       `Sum of problem marks (${marksSum}) does not match totalMarks (${assessment.totalMarks}).`
     );
   }
@@ -4142,11 +4206,11 @@ var closeAssessment = async (id, companyId) => {
     ) ?? {}
   });
   if (!assessment) {
-    throw new appError_default(StatusCodes15.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(StatusCodes16.NOT_FOUND, "Assessment not found.");
   }
   if (assessment.status !== "PUBLISHED" && assessment.status !== "ACTIVE") {
     throw new appError_default(
-      StatusCodes15.CONFLICT,
+      StatusCodes16.CONFLICT,
       `Cannot close an assessment with status ${assessment.status}.`
     );
   }
@@ -4179,11 +4243,11 @@ var softDeleteAssessment = async (id, companyId) => {
     ) ?? {}
   });
   if (!assessment) {
-    throw new appError_default(StatusCodes15.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(StatusCodes16.NOT_FOUND, "Assessment not found.");
   }
   if (assessment.status !== "DRAFT") {
     throw new appError_default(
-      StatusCodes15.CONFLICT,
+      StatusCodes16.CONFLICT,
       "Only DRAFT assessments can be deleted. Close a published assessment instead."
     );
   }
@@ -4217,11 +4281,11 @@ var createAssessmentVersion = async (id, companyId) => {
     }
   });
   if (!existing) {
-    throw new appError_default(StatusCodes15.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(StatusCodes16.NOT_FOUND, "Assessment not found.");
   }
   if (existing.status === "DRAFT") {
     throw new appError_default(
-      StatusCodes15.CONFLICT,
+      StatusCodes16.CONFLICT,
       "Only published or closed assessments can be versioned."
     );
   }
@@ -4305,7 +4369,7 @@ var getAssessmentVersions = async (id, companyId) => {
     }
   });
   if (!existing) {
-    throw new appError_default(StatusCodes15.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(StatusCodes16.NOT_FOUND, "Assessment not found.");
   }
   const versions = await prisma.assessment.findMany({
     where: {
@@ -4348,13 +4412,13 @@ var restoreAssessmentVersion = async (id, companyId) => {
   });
   if (!target) {
     throw new appError_default(
-      StatusCodes15.NOT_FOUND,
+      StatusCodes16.NOT_FOUND,
       "Assessment version not found."
     );
   }
   if (target.isLatestVersion && target.status !== "DRAFT") {
     throw new appError_default(
-      StatusCodes15.CONFLICT,
+      StatusCodes16.CONFLICT,
       "This is already the latest published version."
     );
   }
@@ -4375,7 +4439,7 @@ var restoreAssessmentVersion = async (id, companyId) => {
     });
     if (!latest) {
       throw new appError_default(
-        StatusCodes15.NOT_FOUND,
+        StatusCodes16.NOT_FOUND,
         "Latest assessment version not found."
       );
     }
@@ -4448,7 +4512,7 @@ var createAssessment2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.body
   );
-  res.status(StatusCodes16.CREATED).json({
+  res.status(StatusCodes17.CREATED).json({
     success: true,
     message: "Assessment created successfully.",
     data: assessment
@@ -4461,7 +4525,7 @@ var getAllAssessments2 = catchAsync(async (req, res) => {
     req.query,
     companyId
   );
-  res.status(StatusCodes16.OK).json({
+  res.status(StatusCodes17.OK).json({
     success: true,
     message: "Assessments retrieved successfully.",
     meta: result.meta,
@@ -4475,7 +4539,7 @@ var getAssessmentById2 = catchAsync(async (req, res) => {
     req.params.id,
     companyId
   );
-  res.status(StatusCodes16.OK).json({
+  res.status(StatusCodes17.OK).json({
     success: true,
     message: "Assessment retrieved successfully.",
     data: assessment
@@ -4489,7 +4553,7 @@ var updateAssessment2 = catchAsync(async (req, res) => {
     companyId,
     req.body
   );
-  res.status(StatusCodes16.OK).json({
+  res.status(StatusCodes17.OK).json({
     success: true,
     message: "Assessment updated successfully.",
     data: assessment
@@ -4502,7 +4566,7 @@ var publishAssessment2 = catchAsync(async (req, res) => {
     req.params.id,
     companyId
   );
-  res.status(StatusCodes16.OK).json({
+  res.status(StatusCodes17.OK).json({
     success: true,
     message: "Assessment published successfully.",
     data: assessment
@@ -4515,7 +4579,7 @@ var closeAssessment2 = catchAsync(async (req, res) => {
     req.params.id,
     companyId
   );
-  res.status(StatusCodes16.OK).json({
+  res.status(StatusCodes17.OK).json({
     success: true,
     message: "Assessment closed successfully.",
     data: assessment
@@ -4528,7 +4592,7 @@ var deleteAssessment = catchAsync(async (req, res) => {
     req.params.id,
     companyId
   );
-  res.status(StatusCodes16.OK).json({
+  res.status(StatusCodes17.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -4542,7 +4606,7 @@ var createAssessmentVersion2 = catchAsync(
       req.params.id,
       companyId
     );
-    res.status(StatusCodes16.CREATED).json({
+    res.status(StatusCodes17.CREATED).json({
       success: true,
       message: "New version created successfully.",
       data: assessment
@@ -4557,7 +4621,7 @@ var getAssessmentVersions2 = catchAsync(
       req.params.id,
       companyId
     );
-    res.status(StatusCodes16.OK).json({
+    res.status(StatusCodes17.OK).json({
       success: true,
       message: "Assessment versions retrieved successfully.",
       data: versions
@@ -4572,7 +4636,7 @@ var restoreAssessmentVersion2 = catchAsync(
       req.params.id,
       companyId
     );
-    res.status(StatusCodes16.OK).json({
+    res.status(StatusCodes17.OK).json({
       success: true,
       message: "Assessment version restored successfully. A new draft version has been created.",
       data: assessment
@@ -4774,7 +4838,7 @@ import { Router as Router4 } from "express";
 
 // src/app/middlewares/idempotency.ts
 import crypto from "crypto";
-import { StatusCodes as StatusCodes17 } from "http-status-codes";
+import { StatusCodes as StatusCodes18 } from "http-status-codes";
 var NON_REPLAYABLE_STATUSES = /* @__PURE__ */ new Set([408, 425, 429]);
 var idempotency = () => {
   return async (req, res, next) => {
@@ -4782,21 +4846,21 @@ var idempotency = () => {
     const key = Array.isArray(keyHeader) ? keyHeader[0] : keyHeader;
     if (!key || key.trim() === "") {
       throw new appError_default(
-        StatusCodes17.BAD_REQUEST,
+        StatusCodes18.BAD_REQUEST,
         "Idempotency-Key header is required",
         "MISSING_IDEMPOTENCY_KEY"
       );
     }
     if (key.length > 255) {
       throw new appError_default(
-        StatusCodes17.BAD_REQUEST,
+        StatusCodes18.BAD_REQUEST,
         "Idempotency-Key too long",
         "INVALID_IDEMPOTENCY_KEY"
       );
     }
     if (!req.user?.id) {
       throw new appError_default(
-        StatusCodes17.INTERNAL_SERVER_ERROR,
+        StatusCodes18.INTERNAL_SERVER_ERROR,
         "Idempotency middleware requires auth",
         "INTERNAL_MISCONFIGURATION"
       );
@@ -4819,7 +4883,7 @@ var idempotency = () => {
           return;
         }
         throw new appError_default(
-          StatusCodes17.CONFLICT,
+          StatusCodes18.CONFLICT,
           "Idempotency-Key already used with a different request body",
           "IDEMPOTENCY_CONFLICT"
         );
@@ -4869,10 +4933,10 @@ var idempotency = () => {
 };
 
 // src/app/modules/attempt/attempt.controller.ts
-import { StatusCodes as StatusCodes20 } from "http-status-codes";
+import { StatusCodes as StatusCodes21 } from "http-status-codes";
 
 // src/app/modules/attempt/attempt.service.ts
-import { StatusCodes as StatusCodes19 } from "http-status-codes";
+import { StatusCodes as StatusCodes20 } from "http-status-codes";
 
 // src/app/modules/automation/automation.const.ts
 var AUTOMATION_DISPATCH = {
@@ -4893,7 +4957,7 @@ var AUTOMATION_EVENT_TYPES = {
 };
 
 // src/app/modules/automation/automation.service.ts
-import { StatusCodes as StatusCodes18 } from "http-status-codes";
+import { StatusCodes as StatusCodes19 } from "http-status-codes";
 
 // src/app/modules/automation/automation.signature.ts
 import { createHmac, timingSafeEqual as timingSafeEqual2 } from "crypto";
@@ -5020,7 +5084,7 @@ var dispatchPendingEvents = async () => {
   const { webhookUrl, webhookSecret } = config_default.n8n;
   if (!webhookUrl || !webhookSecret) {
     throw new appError_default(
-      StatusCodes18.SERVICE_UNAVAILABLE,
+      StatusCodes19.SERVICE_UNAVAILABLE,
       "n8n webhook is not configured.",
       "AUTOMATION_NOT_CONFIGURED"
     );
@@ -5430,12 +5494,12 @@ var getAttemptById = async (id, requester) => {
     select: ATTEMPT_DETAIL_SELECT
   });
   if (!attempt) {
-    throw new appError_default(StatusCodes19.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(StatusCodes20.NOT_FOUND, "Attempt not found.");
   }
   const isOwner = attempt.candidateId === requester.id;
   const isOwningRecruiter = requester.companyId !== void 0 && attempt.assessment.companyId === requester.companyId;
   if (requester.role !== "ADMIN" && !isOwner && !isOwningRecruiter) {
-    throw new appError_default(StatusCodes19.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(StatusCodes20.NOT_FOUND, "Attempt not found.");
   }
   if (attempt.status === "IN_PROGRESS" && attempt.expiresAt < /* @__PURE__ */ new Date()) {
     await finalizeAttempt(id);
@@ -5458,24 +5522,24 @@ var startAttempt = async (candidateId, assessmentId) => {
     where: { id: assessmentId, deletedAt: null }
   });
   if (!assessment) {
-    throw new appError_default(StatusCodes19.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(StatusCodes20.NOT_FOUND, "Assessment not found.");
   }
   if (assessment.status !== "PUBLISHED" && assessment.status !== "ACTIVE") {
     throw new appError_default(
-      StatusCodes19.CONFLICT,
+      StatusCodes20.CONFLICT,
       "This assessment is not currently open for attempts."
     );
   }
   const now = /* @__PURE__ */ new Date();
   if (assessment.startAt && now < assessment.startAt) {
     throw new appError_default(
-      StatusCodes19.CONFLICT,
+      StatusCodes20.CONFLICT,
       "This assessment has not started yet."
     );
   }
   if (assessment.endAt && now > assessment.endAt) {
     throw new appError_default(
-      StatusCodes19.CONFLICT,
+      StatusCodes20.CONFLICT,
       "This assessment's window has closed."
     );
   }
@@ -5488,7 +5552,7 @@ var startAttempt = async (candidateId, assessmentId) => {
   });
   if (!invitation) {
     throw new appError_default(
-      StatusCodes19.FORBIDDEN,
+      StatusCodes20.FORBIDDEN,
       "You need an accepted invitation to start this assessment."
     );
   }
@@ -5509,7 +5573,7 @@ var startAttempt = async (candidateId, assessmentId) => {
   });
   if (attemptCount >= assessment.maxAttempts) {
     throw new appError_default(
-      StatusCodes19.CONFLICT,
+      StatusCodes20.CONFLICT,
       `You have used all ${assessment.maxAttempts} allowed attempt(s) for this assessment.`
     );
   }
@@ -5543,25 +5607,25 @@ var saveSubmission = async (attemptId, candidateId, problemId, payload) => {
     }
   });
   if (!attempt) {
-    throw new appError_default(StatusCodes19.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(StatusCodes20.NOT_FOUND, "Attempt not found.");
   }
   if (attempt.status === "IN_PROGRESS" && attempt.expiresAt < /* @__PURE__ */ new Date()) {
     await finalizeAttempt(attemptId);
     throw new appError_default(
-      StatusCodes19.GONE,
+      StatusCodes20.GONE,
       "Time is up - this attempt has been auto-submitted."
     );
   }
   if (attempt.status !== "IN_PROGRESS") {
     throw new appError_default(
-      StatusCodes19.CONFLICT,
+      StatusCodes20.CONFLICT,
       `Cannot modify answers - this attempt is already ${attempt.status.toLowerCase()}.`
     );
   }
   const assessmentProblem = attempt.assessment.assessmentProblems[0];
   if (!assessmentProblem) {
     throw new appError_default(
-      StatusCodes19.BAD_REQUEST,
+      StatusCodes20.BAD_REQUEST,
       "This problem is not part of this assessment."
     );
   }
@@ -5571,7 +5635,7 @@ var saveSubmission = async (attemptId, candidateId, problemId, payload) => {
   if (problem.type === "MCQ") {
     if (payload.selectedOptionIds === void 0) {
       throw new appError_default(
-        StatusCodes19.BAD_REQUEST,
+        StatusCodes20.BAD_REQUEST,
         "selectedOptionIds is required for an MCQ problem."
       );
     }
@@ -5590,13 +5654,13 @@ var saveSubmission = async (attemptId, candidateId, problemId, payload) => {
       );
       if (hasInvalidOption) {
         throw new appError_default(
-          StatusCodes19.BAD_REQUEST,
+          StatusCodes20.BAD_REQUEST,
           "One or more selected options do not belong to this problem."
         );
       }
       if (mcqProblem.type === "SINGLE_CHOICE" && selectedOptionIds.length > 1) {
         throw new appError_default(
-          StatusCodes19.BAD_REQUEST,
+          StatusCodes20.BAD_REQUEST,
           "This is a single-choice question - select only one option."
         );
       }
@@ -5604,7 +5668,7 @@ var saveSubmission = async (attemptId, candidateId, problemId, payload) => {
   } else if (problem.type === "CODING") {
     if (payload.code === void 0) {
       throw new appError_default(
-        StatusCodes19.BAD_REQUEST,
+        StatusCodes20.BAD_REQUEST,
         "code is required for a CODING problem."
       );
     }
@@ -5612,7 +5676,7 @@ var saveSubmission = async (attemptId, candidateId, problemId, payload) => {
   } else {
     if (payload.answerText === void 0) {
       throw new appError_default(
-        StatusCodes19.BAD_REQUEST,
+        StatusCodes20.BAD_REQUEST,
         "answerText is required for a WRITTEN problem."
       );
     }
@@ -5664,11 +5728,11 @@ var submitAttempt = async (attemptId, candidateId) => {
     where: { id: attemptId, candidateId }
   });
   if (!attempt) {
-    throw new appError_default(StatusCodes19.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(StatusCodes20.NOT_FOUND, "Attempt not found.");
   }
   if (attempt.status !== "IN_PROGRESS") {
     throw new appError_default(
-      StatusCodes19.CONFLICT,
+      StatusCodes20.CONFLICT,
       `This attempt is already ${attempt.status.toLowerCase()}.`
     );
   }
@@ -5680,7 +5744,7 @@ var recordProctoringEvent = async (attemptId, candidateId, payload) => {
     where: { id: attemptId, candidateId }
   });
   if (!attempt) {
-    throw new appError_default(StatusCodes19.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(StatusCodes20.NOT_FOUND, "Attempt not found.");
   }
   if (attempt.status !== "IN_PROGRESS") {
     return { recorded: false };
@@ -5724,12 +5788,12 @@ var getProctoringEvents = async (attemptId, requester) => {
     }
   });
   if (!attempt) {
-    throw new appError_default(StatusCodes19.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(StatusCodes20.NOT_FOUND, "Attempt not found.");
   }
   const isOwner = attempt.candidateId === requester.id;
   const isOwningRecruiter = requester.companyId !== void 0 && attempt.assessment.companyId === requester.companyId;
   if (requester.role !== "ADMIN" && !isOwner && !isOwningRecruiter) {
-    throw new appError_default(StatusCodes19.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(StatusCodes20.NOT_FOUND, "Attempt not found.");
   }
   return prisma.proctoringEvent.findMany({
     where: { attemptId },
@@ -5746,18 +5810,18 @@ var getProctoringEventById = async (attemptId, eventId, requester) => {
     }
   });
   if (!attempt) {
-    throw new appError_default(StatusCodes19.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(StatusCodes20.NOT_FOUND, "Attempt not found.");
   }
   const isOwner = attempt.candidateId === requester.id;
   const isOwningRecruiter = requester.companyId !== void 0 && attempt.assessment.companyId === requester.companyId;
   if (requester.role !== "ADMIN" && !isOwner && !isOwningRecruiter) {
-    throw new appError_default(StatusCodes19.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(StatusCodes20.NOT_FOUND, "Attempt not found.");
   }
   const event = await prisma.proctoringEvent.findFirst({
     where: { id: eventId, attemptId }
   });
   if (!event) {
-    throw new appError_default(StatusCodes19.NOT_FOUND, "Proctoring event not found.");
+    throw new appError_default(StatusCodes20.NOT_FOUND, "Proctoring event not found.");
   }
   return event;
 };
@@ -5779,7 +5843,7 @@ var startAttempt2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.body.assessmentId
   );
-  res.status(StatusCodes20.CREATED).json({
+  res.status(StatusCodes21.CREATED).json({
     success: true,
     message: "Attempt started successfully.",
     data: attempt
@@ -5788,7 +5852,7 @@ var startAttempt2 = catchAsync(async (req, res) => {
 var getMyAttempts2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const attempts = await attemptService.getMyAttempts(currentUser.id);
-  res.status(StatusCodes20.OK).json({
+  res.status(StatusCodes21.OK).json({
     success: true,
     message: "Attempts retrieved successfully.",
     data: attempts
@@ -5802,7 +5866,7 @@ var getAttemptById2 = catchAsync(async (req, res) => {
     role: currentUser.role,
     ...companyId !== void 0 && { companyId }
   });
-  res.status(StatusCodes20.OK).json({
+  res.status(StatusCodes21.OK).json({
     success: true,
     message: "Attempt retrieved successfully.",
     data: attempt
@@ -5816,7 +5880,7 @@ var saveSubmission2 = catchAsync(async (req, res) => {
     req.params.problemId,
     req.body
   );
-  res.status(StatusCodes20.OK).json({
+  res.status(StatusCodes21.OK).json({
     success: true,
     message: "Answer saved successfully.",
     data: submission
@@ -5828,7 +5892,7 @@ var submitAttempt2 = catchAsync(async (req, res) => {
     req.params.id,
     currentUser.id
   );
-  res.status(StatusCodes20.OK).json({
+  res.status(StatusCodes21.OK).json({
     success: true,
     message: "Attempt submitted successfully.",
     data: attempt
@@ -5842,7 +5906,7 @@ var recordProctoringEvent2 = catchAsync(
       currentUser.id,
       req.body
     );
-    res.status(StatusCodes20.OK).json({
+    res.status(StatusCodes21.OK).json({
       success: true,
       message: result.recorded ? "Event recorded." : "Attempt is no longer active; event ignored.",
       data: result
@@ -5860,7 +5924,7 @@ var getProctoringEvents2 = catchAsync(async (req, res) => {
       ...companyId !== void 0 && { companyId }
     }
   );
-  res.status(StatusCodes20.OK).json({
+  res.status(StatusCodes21.OK).json({
     success: true,
     message: "Proctoring events retrieved successfully.",
     data: events
@@ -5879,7 +5943,7 @@ var getProctoringEventById2 = catchAsync(
         ...companyId !== void 0 && { companyId }
       }
     );
-    res.status(StatusCodes20.OK).json({
+    res.status(StatusCodes21.OK).json({
       success: true,
       message: "Proctoring event retrieved successfully.",
       data: event
@@ -5993,8 +6057,8 @@ var attemptRoutes = router4;
 import { Router as Router5 } from "express";
 
 // src/app/modules/auth/auth.controller.ts
-import { fromNodeHeaders as fromNodeHeaders2 } from "better-auth/node";
-import { StatusCodes as StatusCodes22 } from "http-status-codes";
+import { fromNodeHeaders as fromNodeHeaders3 } from "better-auth/node";
+import { StatusCodes as StatusCodes23 } from "http-status-codes";
 
 // src/app/utils/authCookies.ts
 var applyAuthCookies = (headers, res) => {
@@ -6138,10 +6202,10 @@ var authService = {
 var register2 = catchAsync(async (req, res) => {
   const { data, headers } = await authService.register(
     req.body,
-    fromNodeHeaders2(req.headers)
+    fromNodeHeaders3(req.headers)
   );
   applyAuthCookies(headers, res);
-  res.status(StatusCodes22.CREATED).json({
+  res.status(StatusCodes23.CREATED).json({
     success: true,
     message: "Registered successfully. Please check your email for the verification code.",
     data
@@ -6150,10 +6214,10 @@ var register2 = catchAsync(async (req, res) => {
 var login2 = catchAsync(async (req, res) => {
   const { data, headers } = await authService.login(
     req.body,
-    fromNodeHeaders2(req.headers)
+    fromNodeHeaders3(req.headers)
   );
   applyAuthCookies(headers, res);
-  res.status(StatusCodes22.OK).json({
+  res.status(StatusCodes23.OK).json({
     success: true,
     message: "Logged in successfully.",
     data
@@ -6161,10 +6225,10 @@ var login2 = catchAsync(async (req, res) => {
 });
 var logout2 = catchAsync(async (req, res) => {
   const { data, headers } = await authService.logout(
-    fromNodeHeaders2(req.headers)
+    fromNodeHeaders3(req.headers)
   );
   applyAuthCookies(headers, res);
-  res.status(StatusCodes22.OK).json({
+  res.status(StatusCodes23.OK).json({
     success: true,
     message: "Logged out successfully.",
     data
@@ -6172,10 +6236,10 @@ var logout2 = catchAsync(async (req, res) => {
 });
 var refreshToken2 = catchAsync(async (req, res) => {
   const { data, headers } = await authService.refreshToken(
-    fromNodeHeaders2(req.headers)
+    fromNodeHeaders3(req.headers)
   );
   applyAuthCookies(headers, res);
-  res.status(StatusCodes22.OK).json({
+  res.status(StatusCodes23.OK).json({
     success: true,
     message: "Session refreshed successfully.",
     data
@@ -6183,7 +6247,7 @@ var refreshToken2 = catchAsync(async (req, res) => {
 });
 var sendEmailOtp2 = catchAsync(async (req, res) => {
   const { data } = await authService.sendEmailOtp(req.body);
-  res.status(StatusCodes22.OK).json({
+  res.status(StatusCodes23.OK).json({
     success: true,
     message: "Verification code sent.",
     data
@@ -6191,7 +6255,7 @@ var sendEmailOtp2 = catchAsync(async (req, res) => {
 });
 var verifyEmailOtp2 = catchAsync(async (req, res) => {
   const { data } = await authService.verifyEmailOtp(req.body);
-  res.status(StatusCodes22.OK).json({
+  res.status(StatusCodes23.OK).json({
     success: true,
     message: "Email verified successfully.",
     data
@@ -6199,7 +6263,7 @@ var verifyEmailOtp2 = catchAsync(async (req, res) => {
 });
 var resetPasswordWithOtp2 = catchAsync(async (req, res) => {
   const { data } = await authService.resetPasswordWithOtp(req.body);
-  res.status(StatusCodes22.OK).json({
+  res.status(StatusCodes23.OK).json({
     success: true,
     message: "Password reset successfully. You can now log in.",
     data
@@ -6208,17 +6272,17 @@ var resetPasswordWithOtp2 = catchAsync(async (req, res) => {
 var changePassword2 = catchAsync(async (req, res) => {
   const { data, headers } = await authService.changePassword(
     req.body,
-    fromNodeHeaders2(req.headers)
+    fromNodeHeaders3(req.headers)
   );
   applyAuthCookies(headers, res);
-  res.status(StatusCodes22.OK).json({
+  res.status(StatusCodes23.OK).json({
     success: true,
     message: "Password changed successfully.",
     data
   });
 });
 var getMe = catchAsync(async (req, res) => {
-  res.status(StatusCodes22.OK).json({
+  res.status(StatusCodes23.OK).json({
     success: true,
     message: "Current user retrieved successfully.",
     data: req.user
@@ -6327,7 +6391,7 @@ var authRoutes = router5;
 import { Router as Router6 } from "express";
 
 // src/app/middlewares/upload.ts
-import { StatusCodes as StatusCodes23 } from "http-status-codes";
+import { StatusCodes as StatusCodes24 } from "http-status-codes";
 import multer2 from "multer";
 var storage = multer2.memoryStorage();
 var IMAGE_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
@@ -6345,7 +6409,7 @@ var makeUploader = (allowedMimeTypes, maxSizeBytes, label) => multer2({
     if (!allowedMimeTypes.includes(file.mimetype)) {
       cb(
         new appError_default(
-          StatusCodes23.BAD_REQUEST,
+          StatusCodes24.BAD_REQUEST,
           `Only ${label} files are allowed.`
         )
       );
@@ -6366,7 +6430,7 @@ var documentUpload = makeUploader(
 );
 
 // src/app/middlewares/validateRequestWithFile.ts
-import { StatusCodes as StatusCodes24 } from "http-status-codes";
+import { StatusCodes as StatusCodes25 } from "http-status-codes";
 var validateRequestWithFile = (schema) => {
   return async (req, res, next) => {
     if (typeof req.body?.data === "string") {
@@ -6375,7 +6439,7 @@ var validateRequestWithFile = (schema) => {
       } catch {
         return next(
           new appError_default(
-            StatusCodes24.BAD_REQUEST,
+            StatusCodes25.BAD_REQUEST,
             "Invalid JSON in 'data' field."
           )
         );
@@ -6386,13 +6450,13 @@ var validateRequestWithFile = (schema) => {
 };
 
 // src/app/modules/candidate/candidate.controller.ts
-import { StatusCodes as StatusCodes27 } from "http-status-codes";
+import { StatusCodes as StatusCodes28 } from "http-status-codes";
 
 // src/app/modules/candidate/candidate.service.ts
-import { StatusCodes as StatusCodes26 } from "http-status-codes";
+import { StatusCodes as StatusCodes27 } from "http-status-codes";
 
 // src/app/utils/fileUploader.ts
-import { StatusCodes as StatusCodes25 } from "http-status-codes";
+import { StatusCodes as StatusCodes26 } from "http-status-codes";
 
 // src/lib/cloudinary.ts
 import { v2 as cloudinary } from "cloudinary";
@@ -6419,7 +6483,7 @@ var getCloudinary = () => {
 var uploadFileToCloudinary = async (buffer, fileName, folder = "uploads") => {
   if (!buffer || !fileName) {
     throw new appError_default(
-      StatusCodes25.BAD_REQUEST,
+      StatusCodes26.BAD_REQUEST,
       "File buffer or file name is missing."
     );
   }
@@ -6433,7 +6497,7 @@ var uploadFileToCloudinary = async (buffer, fileName, folder = "uploads") => {
         if (error || !result) {
           return reject(
             new appError_default(
-              StatusCodes25.INTERNAL_SERVER_ERROR,
+              StatusCodes26.INTERNAL_SERVER_ERROR,
               "Cloudinary upload failed."
             )
           );
@@ -6498,7 +6562,7 @@ var upsertMyProfile = async (userId, payload, file) => {
     where: { id: userId, deletedAt: null }
   });
   if (!user) {
-    throw new appError_default(StatusCodes26.NOT_FOUND, "User not found.");
+    throw new appError_default(StatusCodes27.NOT_FOUND, "User not found.");
   }
   let resumeUrl;
   if (file) {
@@ -6529,7 +6593,7 @@ var getMyProfile = async (userId) => {
     select: CANDIDATE_OWN_SELECT
   });
   if (!profile) {
-    throw new appError_default(StatusCodes26.NOT_FOUND, "Candidate profile not found.");
+    throw new appError_default(StatusCodes27.NOT_FOUND, "Candidate profile not found.");
   }
   return profile;
 };
@@ -6539,7 +6603,7 @@ var getCandidateProfileById = async (id, requesterRole) => {
     select: CANDIDATE_DETAIL_SELECT
   });
   if (!profile) {
-    throw new appError_default(StatusCodes26.NOT_FOUND, "Candidate profile not found.");
+    throw new appError_default(StatusCodes27.NOT_FOUND, "Candidate profile not found.");
   }
   return profile;
 };
@@ -6561,7 +6625,7 @@ var upsertMyProfile2 = catchAsync(async (req, res) => {
     req.body,
     req.file
   );
-  res.status(StatusCodes27.OK).json({
+  res.status(StatusCodes28.OK).json({
     success: true,
     message: "Profile saved successfully.",
     data: profile
@@ -6570,7 +6634,7 @@ var upsertMyProfile2 = catchAsync(async (req, res) => {
 var getMyProfile2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const profile = await candidateService.getMyProfile(currentUser.id);
-  res.status(StatusCodes27.OK).json({
+  res.status(StatusCodes28.OK).json({
     success: true,
     message: "Profile retrieved successfully.",
     data: profile
@@ -6583,7 +6647,7 @@ var getCandidateProfileById2 = catchAsync(
       req.params.id,
       currentUser.role
     );
-    res.status(StatusCodes27.OK).json({
+    res.status(StatusCodes28.OK).json({
       success: true,
       message: "Candidate profile retrieved successfully.",
       data: profile
@@ -6596,7 +6660,7 @@ var getAllCandidates2 = catchAsync(async (req, res) => {
     req.query,
     currentUser.role
   );
-  res.status(StatusCodes27.OK).json({
+  res.status(StatusCodes28.OK).json({
     success: true,
     message: "Candidates retrieved successfully.",
     meta: result.meta,
@@ -6743,10 +6807,10 @@ var candidateRoutes = router6;
 import { Router as Router7 } from "express";
 
 // src/app/modules/company/company.controller.ts
-import { StatusCodes as StatusCodes29 } from "http-status-codes";
+import { StatusCodes as StatusCodes30 } from "http-status-codes";
 
 // src/app/modules/company/company.service.ts
-import { StatusCodes as StatusCodes28 } from "http-status-codes";
+import { StatusCodes as StatusCodes29 } from "http-status-codes";
 
 // src/app/modules/company/company.const.ts
 var COMPANY_DETAIL_SELECT = {
@@ -6832,11 +6896,11 @@ var registerCompany = async (userId, payload) => {
     select: { role: true }
   });
   if (!user) {
-    throw new appError_default(StatusCodes28.NOT_FOUND, "User not found.");
+    throw new appError_default(StatusCodes29.NOT_FOUND, "User not found.");
   }
   if (user.role === "ADMIN") {
     throw new appError_default(
-      StatusCodes28.FORBIDDEN,
+      StatusCodes29.FORBIDDEN,
       "Admin accounts can't register a company."
     );
   }
@@ -6845,7 +6909,7 @@ var registerCompany = async (userId, payload) => {
   });
   if (existing && !existing.deletedAt) {
     throw new appError_default(
-      StatusCodes28.CONFLICT,
+      StatusCodes29.CONFLICT,
       "You already have a company registered."
     );
   }
@@ -6933,7 +6997,7 @@ var registerCompany = async (userId, payload) => {
   } catch (error) {
     if (isUniqueConstraintError(error)) {
       throw new appError_default(
-        StatusCodes28.CONFLICT,
+        StatusCodes29.CONFLICT,
         "A company with these details already exists. Please try again."
       );
     }
@@ -6952,11 +7016,11 @@ var getCompanyById = async (id, requesterId, requesterRole) => {
     select: COMPANY_DETAIL_SELECT
   });
   if (!company) {
-    throw new appError_default(StatusCodes28.NOT_FOUND, "Company not found.");
+    throw new appError_default(StatusCodes29.NOT_FOUND, "Company not found.");
   }
   const canSeeUnverified = requesterRole === "ADMIN" || company.ownerId === requesterId;
   if (!company.isVerified && !canSeeUnverified) {
-    throw new appError_default(StatusCodes28.NOT_FOUND, "Company not found.");
+    throw new appError_default(StatusCodes29.NOT_FOUND, "Company not found.");
   }
   return company;
 };
@@ -6967,7 +7031,7 @@ var getMyCompany = async (userId) => {
   });
   if (!company) {
     throw new appError_default(
-      StatusCodes28.NOT_FOUND,
+      StatusCodes29.NOT_FOUND,
       "You don't have a registered company yet."
     );
   }
@@ -6979,7 +7043,7 @@ var updateMyCompany = async (userId, payload, file) => {
   });
   if (!existing) {
     throw new appError_default(
-      StatusCodes28.NOT_FOUND,
+      StatusCodes29.NOT_FOUND,
       "You don't have a registered company yet."
     );
   }
@@ -7038,13 +7102,13 @@ var requestVerification = async (userId) => {
   });
   if (!company) {
     throw new appError_default(
-      StatusCodes28.NOT_FOUND,
+      StatusCodes29.NOT_FOUND,
       "You don't have a registered company yet."
     );
   }
   if (company.isVerified) {
     throw new appError_default(
-      StatusCodes28.CONFLICT,
+      StatusCodes29.CONFLICT,
       "Your company is already verified."
     );
   }
@@ -7061,14 +7125,14 @@ var requestVerification = async (userId) => {
   });
   if (recentlyNotified) {
     throw new appError_default(
-      StatusCodes28.TOO_MANY_REQUESTS,
+      StatusCodes29.TOO_MANY_REQUESTS,
       "Admins were already notified in the last 24 hours. Please try again later."
     );
   }
   const notified = await notifyAdminsOfPendingCompany(company, true);
   if (notified === 0) {
     throw new appError_default(
-      StatusCodes28.SERVICE_UNAVAILABLE,
+      StatusCodes29.SERVICE_UNAVAILABLE,
       "No administrator is available to review your company right now."
     );
   }
@@ -7079,10 +7143,10 @@ var verifyCompany = async (id, actorId) => {
     where: { id, deletedAt: null }
   });
   if (!company) {
-    throw new appError_default(StatusCodes28.NOT_FOUND, "Company not found.");
+    throw new appError_default(StatusCodes29.NOT_FOUND, "Company not found.");
   }
   if (company.isVerified) {
-    throw new appError_default(StatusCodes28.CONFLICT, "Company is already verified.");
+    throw new appError_default(StatusCodes29.CONFLICT, "Company is already verified.");
   }
   const [updated] = await prisma.$transaction([
     prisma.company.update({
@@ -7109,12 +7173,12 @@ var softDeleteCompany = async (id, actorId, actorRole) => {
     where: { id, deletedAt: null }
   });
   if (!company) {
-    throw new appError_default(StatusCodes28.NOT_FOUND, "Company not found.");
+    throw new appError_default(StatusCodes29.NOT_FOUND, "Company not found.");
   }
   const isOwner = company.ownerId === actorId;
   if (!isOwner && actorRole !== "ADMIN") {
     throw new appError_default(
-      StatusCodes28.FORBIDDEN,
+      StatusCodes29.FORBIDDEN,
       "You don't have permission to delete this company."
     );
   }
@@ -7178,7 +7242,7 @@ var getMySubscription = async (userId) => {
   });
   if (!company) {
     throw new appError_default(
-      StatusCodes28.NOT_FOUND,
+      StatusCodes29.NOT_FOUND,
       "You don't have a registered company yet."
     );
   }
@@ -7198,7 +7262,7 @@ var getMySubscription = async (userId) => {
 var updateMySubscription = async (userId, plan) => {
   if (plan !== "FREE") {
     throw new appError_default(
-      StatusCodes28.BAD_REQUEST,
+      StatusCodes29.BAD_REQUEST,
       "Paid plans can only be activated through checkout."
     );
   }
@@ -7207,7 +7271,7 @@ var updateMySubscription = async (userId, plan) => {
   });
   if (!company) {
     throw new appError_default(
-      StatusCodes28.NOT_FOUND,
+      StatusCodes29.NOT_FOUND,
       "You don't have a registered company yet."
     );
   }
@@ -7231,19 +7295,19 @@ var cancelMySubscription = async (userId) => {
   });
   if (!company) {
     throw new appError_default(
-      StatusCodes28.NOT_FOUND,
+      StatusCodes29.NOT_FOUND,
       "You don't have a registered company yet."
     );
   }
   if (!company.subscription) {
     throw new appError_default(
-      StatusCodes28.NOT_FOUND,
+      StatusCodes29.NOT_FOUND,
       "No active subscription to cancel."
     );
   }
   if (company.subscription.status === "CANCELLED" || company.subscription.status === "EXPIRED") {
     throw new appError_default(
-      StatusCodes28.CONFLICT,
+      StatusCodes29.CONFLICT,
       "Subscription is already cancelled or expired."
     );
   }
@@ -7278,7 +7342,7 @@ var registerCompany2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.body
   );
-  res.status(StatusCodes29.CREATED).json({
+  res.status(StatusCodes30.CREATED).json({
     success: true,
     message: "Company registered successfully. Awaiting admin verification.",
     data: company
@@ -7290,7 +7354,7 @@ var getAllCompanies2 = catchAsync(async (req, res) => {
     req.query,
     requesterRole
   );
-  res.status(StatusCodes29.OK).json({
+  res.status(StatusCodes30.OK).json({
     success: true,
     message: "Companies retrieved successfully.",
     meta: result.meta,
@@ -7304,7 +7368,7 @@ var getCompanyById2 = catchAsync(async (req, res) => {
     requester?.id ?? "",
     requester?.role ?? "CANDIDATE"
   );
-  res.status(StatusCodes29.OK).json({
+  res.status(StatusCodes30.OK).json({
     success: true,
     message: "Company retrieved successfully.",
     data: company
@@ -7313,7 +7377,7 @@ var getCompanyById2 = catchAsync(async (req, res) => {
 var getMyCompany2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const company = await companyService.getMyCompany(currentUser.id);
-  res.status(StatusCodes29.OK).json({
+  res.status(StatusCodes30.OK).json({
     success: true,
     message: "Your company retrieved successfully.",
     data: company
@@ -7326,7 +7390,7 @@ var updateMyCompany2 = catchAsync(async (req, res) => {
     req.body,
     req.file
   );
-  res.status(StatusCodes29.OK).json({
+  res.status(StatusCodes30.OK).json({
     success: true,
     message: "Company updated successfully.",
     data: company
@@ -7335,7 +7399,7 @@ var updateMyCompany2 = catchAsync(async (req, res) => {
 var requestVerification2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const result = await companyService.requestVerification(currentUser.id);
-  res.status(StatusCodes29.OK).json({
+  res.status(StatusCodes30.OK).json({
     success: true,
     message: "Admins have been notified and will review your company.",
     data: result
@@ -7347,7 +7411,7 @@ var verifyCompany2 = catchAsync(async (req, res) => {
     req.params.id,
     currentUser.id
   );
-  res.status(StatusCodes29.OK).json({
+  res.status(StatusCodes30.OK).json({
     success: true,
     message: "Company verified successfully.",
     data: company
@@ -7360,7 +7424,7 @@ var deleteCompany = catchAsync(async (req, res) => {
     currentUser.id,
     currentUser.role
   );
-  res.status(StatusCodes29.OK).json({
+  res.status(StatusCodes30.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -7369,7 +7433,7 @@ var deleteCompany = catchAsync(async (req, res) => {
 var getMySubscription2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const subscription = await companyService.getMySubscription(currentUser.id);
-  res.status(StatusCodes29.OK).json({
+  res.status(StatusCodes30.OK).json({
     success: true,
     message: "Subscription retrieved successfully.",
     data: subscription
@@ -7381,7 +7445,7 @@ var updateMySubscription2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.body.plan
   );
-  res.status(StatusCodes29.OK).json({
+  res.status(StatusCodes30.OK).json({
     success: true,
     message: "Subscription updated successfully.",
     data: subscription
@@ -7392,7 +7456,7 @@ var cancelMySubscription2 = catchAsync(async (req, res) => {
   const subscription = await companyService.cancelMySubscription(
     currentUser.id
   );
-  res.status(StatusCodes29.OK).json({
+  res.status(StatusCodes30.OK).json({
     success: true,
     message: "Subscription cancelled successfully. It will remain active until the end of the current period.",
     data: subscription
@@ -7492,10 +7556,10 @@ var companyRoutes = router7;
 import { Router as Router8 } from "express";
 
 // src/app/modules/consent/consent.controller.ts
-import { StatusCodes as StatusCodes31 } from "http-status-codes";
+import { StatusCodes as StatusCodes32 } from "http-status-codes";
 
 // src/app/modules/consent/consent.service.ts
-import { StatusCodes as StatusCodes30 } from "http-status-codes";
+import { StatusCodes as StatusCodes31 } from "http-status-codes";
 
 // src/app/modules/consent/consent.const.ts
 var CONSENT_SELECT = {
@@ -7576,17 +7640,17 @@ var updateConsent = async (userId, payload) => {
 };
 var revokeConsent = async (userId, consentType) => {
   if (!isConsentType(consentType)) {
-    throw new appError_default(StatusCodes30.BAD_REQUEST, "Unknown consent type.");
+    throw new appError_default(StatusCodes31.BAD_REQUEST, "Unknown consent type.");
   }
   const existing = await prisma.userConsent.findUnique({
     where: { userId_consentType: { userId, consentType } }
   });
   if (!existing) {
-    throw new appError_default(StatusCodes30.NOT_FOUND, "Consent not found.");
+    throw new appError_default(StatusCodes31.NOT_FOUND, "Consent not found.");
   }
   if (!existing.granted) {
     throw new appError_default(
-      StatusCodes30.CONFLICT,
+      StatusCodes31.CONFLICT,
       "This consent is already revoked."
     );
   }
@@ -7606,7 +7670,7 @@ var consentService = {
 var getMyConsents2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const consents = await consentService.getMyConsents(currentUser.id);
-  res.status(StatusCodes31.OK).json({
+  res.status(StatusCodes32.OK).json({
     success: true,
     message: "Consents retrieved successfully.",
     data: consents
@@ -7615,7 +7679,7 @@ var getMyConsents2 = catchAsync(async (req, res) => {
 var updateConsent2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const consent = await consentService.updateConsent(currentUser.id, req.body);
-  res.status(StatusCodes31.OK).json({
+  res.status(StatusCodes32.OK).json({
     success: true,
     message: "Consent updated successfully.",
     data: consent
@@ -7627,7 +7691,7 @@ var revokeConsent2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.params.consentType
   );
-  res.status(StatusCodes31.OK).json({
+  res.status(StatusCodes32.OK).json({
     success: true,
     message: "Consent revoked successfully.",
     data: consent
@@ -7667,13 +7731,13 @@ var consentRoutes = router8;
 import { Router as Router9 } from "express";
 
 // src/app/modules/evaluation/evaluation.controller.ts
-import { StatusCodes as StatusCodes33 } from "http-status-codes";
+import { StatusCodes as StatusCodes34 } from "http-status-codes";
 
 // src/app/modules/evaluation/evaluation.service.ts
-import { StatusCodes as StatusCodes32 } from "http-status-codes";
+import { StatusCodes as StatusCodes33 } from "http-status-codes";
 var assertCanGrade = (requesterCompanyId, submissionCompanyId, role) => {
   if (role !== "ADMIN" && requesterCompanyId !== submissionCompanyId) {
-    throw new appError_default(StatusCodes32.NOT_FOUND, "Submission not found.");
+    throw new appError_default(StatusCodes33.NOT_FOUND, "Submission not found.");
   }
 };
 var getSubmissionsForAttempt = async (attemptId, requester) => {
@@ -7682,7 +7746,7 @@ var getSubmissionsForAttempt = async (attemptId, requester) => {
     select: { id: true, assessment: { select: { companyId: true } } }
   });
   if (!attempt) {
-    throw new appError_default(StatusCodes32.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(StatusCodes33.NOT_FOUND, "Attempt not found.");
   }
   assertCanGrade(
     requester.companyId,
@@ -7701,7 +7765,7 @@ var getSubmissionById = async (id, requester) => {
     select: SUBMISSION_GRADING_SELECT
   });
   if (!submission) {
-    throw new appError_default(StatusCodes32.NOT_FOUND, "Submission not found.");
+    throw new appError_default(StatusCodes33.NOT_FOUND, "Submission not found.");
   }
   const attempt = await prisma.assessmentAttempt.findUniqueOrThrow({
     where: { id: submission.attemptId },
@@ -7719,7 +7783,7 @@ var getPendingEvaluations = async (assessmentId, companyId) => {
     where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId)
   });
   if (!assessment) {
-    throw new appError_default(StatusCodes32.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(StatusCodes33.NOT_FOUND, "Assessment not found.");
   }
   return prisma.submission.findMany({
     where: { attempt: { assessmentId }, evaluation: { status: "PENDING" } },
@@ -7748,7 +7812,7 @@ var evaluateSubmission = async (id, evaluatorId, companyId, payload) => {
     }
   });
   if (!submission) {
-    throw new appError_default(StatusCodes32.NOT_FOUND, "Submission not found.");
+    throw new appError_default(StatusCodes33.NOT_FOUND, "Submission not found.");
   }
   assertCanGrade(
     companyId,
@@ -7757,13 +7821,13 @@ var evaluateSubmission = async (id, evaluatorId, companyId, payload) => {
   );
   if (submission.attempt.status === "NOT_STARTED" || submission.attempt.status === "IN_PROGRESS") {
     throw new appError_default(
-      StatusCodes32.CONFLICT,
+      StatusCodes33.CONFLICT,
       "This attempt hasn't been submitted yet."
     );
   }
   if (submission.problem.type === "MCQ") {
     throw new appError_default(
-      StatusCodes32.BAD_REQUEST,
+      StatusCodes33.BAD_REQUEST,
       "MCQ submissions are graded automatically and cannot be manually re-graded."
     );
   }
@@ -7773,7 +7837,7 @@ var evaluateSubmission = async (id, evaluatorId, companyId, payload) => {
   const maxScore = assessmentProblem?.marks ?? submission.problem.defaultMarks;
   if (payload.score > maxScore) {
     throw new appError_default(
-      StatusCodes32.BAD_REQUEST,
+      StatusCodes33.BAD_REQUEST,
       `Score cannot exceed the maximum marks for this problem (${maxScore}).`
     );
   }
@@ -7856,7 +7920,7 @@ var approveAiSuggestion = async (id, evaluatorId, companyId) => {
     }
   });
   if (!submission) {
-    throw new appError_default(StatusCodes32.NOT_FOUND, "Submission not found.");
+    throw new appError_default(StatusCodes33.NOT_FOUND, "Submission not found.");
   }
   assertCanGrade(
     companyId,
@@ -7866,13 +7930,13 @@ var approveAiSuggestion = async (id, evaluatorId, companyId) => {
   const evaluation = submission.evaluation;
   if (!evaluation || evaluation.reviewStatus !== "PENDING_REVIEW" || evaluation.aiScore === null) {
     throw new appError_default(
-      StatusCodes32.CONFLICT,
+      StatusCodes33.CONFLICT,
       "There is no AI suggestion waiting for review on this submission."
     );
   }
   if (evaluation.status === "COMPLETED") {
     throw new appError_default(
-      StatusCodes32.CONFLICT,
+      StatusCodes33.CONFLICT,
       "This submission has already been graded."
     );
   }
@@ -7924,7 +7988,7 @@ var getSubmissionsForAttempt2 = catchAsync(
         ...companyId !== void 0 && { companyId }
       }
     );
-    res.status(StatusCodes33.OK).json({
+    res.status(StatusCodes34.OK).json({
       success: true,
       message: "Submissions retrieved successfully.",
       data: submissions
@@ -7942,7 +8006,7 @@ var getSubmissionById2 = catchAsync(async (req, res) => {
       ...companyId !== void 0 && { companyId }
     }
   );
-  res.status(StatusCodes33.OK).json({
+  res.status(StatusCodes34.OK).json({
     success: true,
     message: "Submission retrieved successfully.",
     data: submission
@@ -7956,7 +8020,7 @@ var getPendingEvaluations2 = catchAsync(
       req.params.assessmentId,
       companyId
     );
-    res.status(StatusCodes33.OK).json({
+    res.status(StatusCodes34.OK).json({
       success: true,
       message: "Pending evaluations retrieved successfully.",
       data: submissions
@@ -7972,7 +8036,7 @@ var evaluateSubmission2 = catchAsync(async (req, res) => {
     companyId,
     req.body
   );
-  res.status(StatusCodes33.OK).json({
+  res.status(StatusCodes34.OK).json({
     success: true,
     message: "Submission evaluated successfully.",
     data: submission
@@ -7986,7 +8050,7 @@ var approveAiSuggestion2 = catchAsync(async (req, res) => {
     currentUser.id,
     companyId
   );
-  res.status(StatusCodes33.OK).json({
+  res.status(StatusCodes34.OK).json({
     success: true,
     message: "AI suggestion approved.",
     data: submission
@@ -8044,11 +8108,11 @@ var evaluationRoutes = router9;
 import { Router as Router10 } from "express";
 
 // src/app/modules/invitation/invitation.controller.ts
-import { StatusCodes as StatusCodes35 } from "http-status-codes";
+import { StatusCodes as StatusCodes36 } from "http-status-codes";
 
 // src/app/modules/invitation/invitation.service.ts
 import { createHash, randomUUID } from "crypto";
-import { StatusCodes as StatusCodes34 } from "http-status-codes";
+import { StatusCodes as StatusCodes35 } from "http-status-codes";
 
 // src/lib/resend.ts
 import { Resend } from "resend";
@@ -8164,11 +8228,11 @@ var inviteCandidates = async (assessmentId, companyId, payload) => {
     where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId) ?? {}
   });
   if (!assessment) {
-    throw new appError_default(StatusCodes34.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(StatusCodes35.NOT_FOUND, "Assessment not found.");
   }
   if (assessment.status !== "PUBLISHED" && assessment.status !== "ACTIVE") {
     throw new appError_default(
-      StatusCodes34.CONFLICT,
+      StatusCodes35.CONFLICT,
       "Candidates can only be invited to a published assessment."
     );
   }
@@ -8264,7 +8328,7 @@ var inviteCandidates = async (assessmentId, companyId, payload) => {
 var getInvitationsForAssessment = async (assessmentId, companyId, query) => {
   if (!companyId) {
     throw new appError_default(
-      StatusCodes34.FORBIDDEN,
+      StatusCodes35.FORBIDDEN,
       "Recruiter scope could not be resolved."
     );
   }
@@ -8272,7 +8336,7 @@ var getInvitationsForAssessment = async (assessmentId, companyId, query) => {
     where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId) ?? {}
   });
   if (!assessment) {
-    throw new appError_default(StatusCodes34.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(StatusCodes35.NOT_FOUND, "Assessment not found.");
   }
   return invitationQueryBuilder.execute(query, { assessmentId });
 };
@@ -8314,12 +8378,12 @@ var getInvitationById = async (id, requester) => {
     select: INVITATION_SELECT
   });
   if (!invitation) {
-    throw new appError_default(StatusCodes34.NOT_FOUND, "Invitation not found.");
+    throw new appError_default(StatusCodes35.NOT_FOUND, "Invitation not found.");
   }
   const isInvitedCandidate = invitation.candidateId === requester.id || invitation.email.toLowerCase() === requester.email.toLowerCase();
   const isOwningRecruiter = requester.companyId !== void 0 && invitation.assessment.companyId === requester.companyId;
   if (requester.role !== "ADMIN" && !isInvitedCandidate && !isOwningRecruiter) {
-    throw new appError_default(StatusCodes34.NOT_FOUND, "Invitation not found.");
+    throw new appError_default(StatusCodes35.NOT_FOUND, "Invitation not found.");
   }
   return invitation;
 };
@@ -8329,12 +8393,12 @@ var acceptInvitation = async (id, userId, email) => {
     include: { assessment: true }
   });
   if (!invitation) {
-    throw new appError_default(StatusCodes34.NOT_FOUND, "Invitation not found.");
+    throw new appError_default(StatusCodes35.NOT_FOUND, "Invitation not found.");
   }
   const belongsToUser = invitation.candidateId === userId || invitation.email.toLowerCase() === email.toLowerCase();
   if (!belongsToUser) {
     throw new appError_default(
-      StatusCodes34.FORBIDDEN,
+      StatusCodes35.FORBIDDEN,
       "This invitation does not belong to your account."
     );
   }
@@ -8343,17 +8407,17 @@ var acceptInvitation = async (id, userId, email) => {
       where: { id },
       data: { status: "EXPIRED" }
     });
-    throw new appError_default(StatusCodes34.GONE, "This invitation has expired.");
+    throw new appError_default(StatusCodes35.GONE, "This invitation has expired.");
   }
   if (invitation.status !== "PENDING") {
     throw new appError_default(
-      StatusCodes34.CONFLICT,
+      StatusCodes35.CONFLICT,
       `This invitation is already ${invitation.status.toLowerCase()}.`
     );
   }
   if (invitation.assessment.status !== "PUBLISHED" && invitation.assessment.status !== "ACTIVE") {
     throw new appError_default(
-      StatusCodes34.CONFLICT,
+      StatusCodes35.CONFLICT,
       "This assessment is no longer accepting candidates."
     );
   }
@@ -8368,18 +8432,18 @@ var declineInvitation = async (id, userId, email) => {
     where: { id }
   });
   if (!invitation) {
-    throw new appError_default(StatusCodes34.NOT_FOUND, "Invitation not found.");
+    throw new appError_default(StatusCodes35.NOT_FOUND, "Invitation not found.");
   }
   const belongsToUser = invitation.candidateId === userId || invitation.email.toLowerCase() === email.toLowerCase();
   if (!belongsToUser) {
     throw new appError_default(
-      StatusCodes34.FORBIDDEN,
+      StatusCodes35.FORBIDDEN,
       "This invitation does not belong to your account."
     );
   }
   if (invitation.status !== "PENDING") {
     throw new appError_default(
-      StatusCodes34.CONFLICT,
+      StatusCodes35.CONFLICT,
       `This invitation is already ${invitation.status.toLowerCase()}.`
     );
   }
@@ -8398,11 +8462,11 @@ var cancelInvitation = async (id, companyId) => {
     include: { assessment: true }
   });
   if (!invitation) {
-    throw new appError_default(StatusCodes34.NOT_FOUND, "Invitation not found.");
+    throw new appError_default(StatusCodes35.NOT_FOUND, "Invitation not found.");
   }
   if (invitation.status !== "PENDING") {
     throw new appError_default(
-      StatusCodes34.CONFLICT,
+      StatusCodes35.CONFLICT,
       "Only a pending invitation can be cancelled."
     );
   }
@@ -8428,7 +8492,7 @@ var inviteCandidates2 = catchAsync(async (req, res) => {
     companyId,
     req.body
   );
-  res.status(StatusCodes35.CREATED).json({
+  res.status(StatusCodes36.CREATED).json({
     success: true,
     message: `${result.invited} candidate(s) invited${result.skipped ? `, ${result.skipped} already invited` : ""}.`,
     data: result
@@ -8443,7 +8507,7 @@ var getInvitationsForAssessment2 = catchAsync(
       companyId,
       req.query
     );
-    res.status(StatusCodes35.OK).json({
+    res.status(StatusCodes36.OK).json({
       success: true,
       message: "Invitations retrieved successfully.",
       meta: result.meta,
@@ -8457,7 +8521,7 @@ var getMyInvitations2 = catchAsync(async (req, res) => {
     currentUser.id,
     currentUser.email
   );
-  res.status(StatusCodes35.OK).json({
+  res.status(StatusCodes36.OK).json({
     success: true,
     message: "Invitations retrieved successfully.",
     data: invitations
@@ -8475,7 +8539,7 @@ var getInvitationById2 = catchAsync(async (req, res) => {
       ...companyId !== void 0 && { companyId }
     }
   );
-  res.status(StatusCodes35.OK).json({
+  res.status(StatusCodes36.OK).json({
     success: true,
     message: "Invitation retrieved successfully.",
     data: invitation
@@ -8488,7 +8552,7 @@ var acceptInvitation2 = catchAsync(async (req, res) => {
     currentUser.id,
     currentUser.email
   );
-  res.status(StatusCodes35.OK).json({
+  res.status(StatusCodes36.OK).json({
     success: true,
     message: "Invitation accepted successfully.",
     data: invitation
@@ -8501,7 +8565,7 @@ var declineInvitation2 = catchAsync(async (req, res) => {
     currentUser.id,
     currentUser.email
   );
-  res.status(StatusCodes35.OK).json({
+  res.status(StatusCodes36.OK).json({
     success: true,
     message: "Invitation declined.",
     data: invitation
@@ -8514,7 +8578,7 @@ var cancelInvitation2 = catchAsync(async (req, res) => {
     req.params.id,
     companyId
   );
-  res.status(StatusCodes35.OK).json({
+  res.status(StatusCodes36.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -8584,10 +8648,10 @@ var invitationRoutes = router10;
 import { Router as Router11 } from "express";
 
 // src/app/modules/notification/notification.controller.ts
-import { StatusCodes as StatusCodes37 } from "http-status-codes";
+import { StatusCodes as StatusCodes38 } from "http-status-codes";
 
 // src/app/modules/notification/notification.service.ts
-import { StatusCodes as StatusCodes36 } from "http-status-codes";
+import { StatusCodes as StatusCodes37 } from "http-status-codes";
 
 // src/app/modules/notification/notification.const.ts
 var NOTIFICATION_SELECT = {
@@ -8641,7 +8705,7 @@ var markAsRead = async (id, userId) => {
     where: { id, userId }
   });
   if (!notification) {
-    throw new appError_default(StatusCodes36.NOT_FOUND, "Notification not found.");
+    throw new appError_default(StatusCodes37.NOT_FOUND, "Notification not found.");
   }
   return prisma.notification.update({
     where: { id },
@@ -8661,7 +8725,7 @@ var deleteNotification = async (id, userId) => {
     where: { id, userId }
   });
   if (!notification) {
-    throw new appError_default(StatusCodes36.NOT_FOUND, "Notification not found.");
+    throw new appError_default(StatusCodes37.NOT_FOUND, "Notification not found.");
   }
   await prisma.notification.delete({ where: { id } });
   return { message: "Notification deleted successfully." };
@@ -8681,7 +8745,7 @@ var getMyNotifications2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.query
   );
-  res.status(StatusCodes37.OK).json({
+  res.status(StatusCodes38.OK).json({
     success: true,
     message: "Notifications retrieved successfully.",
     meta: result.meta,
@@ -8691,7 +8755,7 @@ var getMyNotifications2 = catchAsync(async (req, res) => {
 var getUnreadCount2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const result = await notificationService.getUnreadCount(currentUser.id);
-  res.status(StatusCodes37.OK).json({
+  res.status(StatusCodes38.OK).json({
     success: true,
     message: "Unread count retrieved successfully.",
     data: result
@@ -8703,7 +8767,7 @@ var markAsRead2 = catchAsync(async (req, res) => {
     req.params.id,
     currentUser.id
   );
-  res.status(StatusCodes37.OK).json({
+  res.status(StatusCodes38.OK).json({
     success: true,
     message: "Notification marked as read.",
     data: notification
@@ -8712,7 +8776,7 @@ var markAsRead2 = catchAsync(async (req, res) => {
 var markAllAsRead2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const result = await notificationService.markAllAsRead(currentUser.id);
-  res.status(StatusCodes37.OK).json({
+  res.status(StatusCodes38.OK).json({
     success: true,
     message: `${result.updated} notification(s) marked as read.`,
     data: result
@@ -8724,7 +8788,7 @@ var deleteNotification2 = catchAsync(async (req, res) => {
     req.params.id,
     currentUser.id
   );
-  res.status(StatusCodes37.OK).json({
+  res.status(StatusCodes38.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -8752,7 +8816,7 @@ var notificationRoutes = router11;
 import { Router as Router12 } from "express";
 
 // src/app/modules/payment/payment.controller.ts
-import { StatusCodes as StatusCodes38 } from "http-status-codes";
+import { StatusCodes as StatusCodes39 } from "http-status-codes";
 var createCheckoutSession2 = catchAsync(
   async (req, res) => {
     const currentUser = req.user;
@@ -8762,7 +8826,7 @@ var createCheckoutSession2 = catchAsync(
       company.id,
       req.body
     );
-    res.status(StatusCodes38.CREATED).json({
+    res.status(StatusCodes39.CREATED).json({
       success: true,
       message: "Checkout session created.",
       data: result
@@ -8775,7 +8839,7 @@ var getMyPayments2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.query
   );
-  res.status(StatusCodes38.OK).json({
+  res.status(StatusCodes39.OK).json({
     success: true,
     message: "Payments retrieved successfully.",
     meta: result.meta,
@@ -8786,7 +8850,7 @@ var getAllPayments2 = catchAsync(async (req, res) => {
   const result = await paymentService.getAllPayments(
     req.query
   );
-  res.status(StatusCodes38.OK).json({
+  res.status(StatusCodes39.OK).json({
     success: true,
     message: "Payments retrieved successfully.",
     meta: result.meta,
@@ -8799,7 +8863,7 @@ var getPaymentById2 = catchAsync(async (req, res) => {
     id: currentUser.id,
     role: currentUser.role
   });
-  res.status(StatusCodes38.OK).json({
+  res.status(StatusCodes39.OK).json({
     success: true,
     message: "Payment retrieved successfully.",
     data: payment
@@ -8811,7 +8875,7 @@ var syncPayment2 = catchAsync(async (req, res) => {
     id: currentUser.id,
     role: currentUser.role
   });
-  res.status(StatusCodes38.OK).json({
+  res.status(StatusCodes39.OK).json({
     success: true,
     message: "Payment status refreshed.",
     data: payment
@@ -8861,10 +8925,10 @@ var paymentRoutes = router12;
 import { Router as Router13 } from "express";
 
 // src/app/modules/problem/problem.controller.ts
-import { StatusCodes as StatusCodes40 } from "http-status-codes";
+import { StatusCodes as StatusCodes41 } from "http-status-codes";
 
 // src/app/modules/problem/problem.service.ts
-import { StatusCodes as StatusCodes39 } from "http-status-codes";
+import { StatusCodes as StatusCodes40 } from "http-status-codes";
 
 // src/app/modules/problem/problem.const.ts
 var PROBLEM_DETAIL_SELECT = {
@@ -9012,7 +9076,7 @@ var getProblemById = async (id, companyId) => {
     select: PROBLEM_DETAIL_SELECT
   });
   if (!problem) {
-    throw new appError_default(StatusCodes39.NOT_FOUND, "Problem not found.");
+    throw new appError_default(StatusCodes40.NOT_FOUND, "Problem not found.");
   }
   return problem;
 };
@@ -9022,11 +9086,11 @@ var updateProblem = async (id, companyId, payload) => {
     where: whereClause
   });
   if (!existing) {
-    throw new appError_default(StatusCodes39.NOT_FOUND, "Problem not found.");
+    throw new appError_default(StatusCodes40.NOT_FOUND, "Problem not found.");
   }
   if (payload.rubric !== void 0 && existing.type !== "WRITTEN") {
     throw new appError_default(
-      StatusCodes39.BAD_REQUEST,
+      StatusCodes40.BAD_REQUEST,
       "A rubric can only be set on a WRITTEN problem."
     );
   }
@@ -9073,7 +9137,7 @@ var updateProblem = async (id, companyId, payload) => {
     });
     if (hasGradedResult) {
       throw new appError_default(
-        StatusCodes39.CONFLICT,
+        StatusCodes40.CONFLICT,
         "This problem's test cases can't be changed after candidates have been graded against them. Create a new problem instead."
       );
     }
@@ -9090,7 +9154,7 @@ var softDeleteProblem = async (id, companyId) => {
     where: whereClause
   });
   if (!existing) {
-    throw new appError_default(StatusCodes39.NOT_FOUND, "Problem not found.");
+    throw new appError_default(StatusCodes40.NOT_FOUND, "Problem not found.");
   }
   const usedInLiveAssessment = await prisma.assessmentProblem.findFirst({
     where: {
@@ -9100,7 +9164,7 @@ var softDeleteProblem = async (id, companyId) => {
   });
   if (usedInLiveAssessment) {
     throw new appError_default(
-      StatusCodes39.CONFLICT,
+      StatusCodes40.CONFLICT,
       "This problem is part of a published assessment and can't be deleted. Remove it from the assessment first."
     );
   }
@@ -9127,7 +9191,7 @@ var createProblem2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.body
   );
-  res.status(StatusCodes40.CREATED).json({
+  res.status(StatusCodes41.CREATED).json({
     success: true,
     message: "Problem created successfully.",
     data: problem
@@ -9140,7 +9204,7 @@ var getAllProblems2 = catchAsync(async (req, res) => {
     req.query,
     companyId
   );
-  res.status(StatusCodes40.OK).json({
+  res.status(StatusCodes41.OK).json({
     success: true,
     message: "Problems retrieved successfully.",
     meta: result.meta,
@@ -9154,7 +9218,7 @@ var getProblemById2 = catchAsync(async (req, res) => {
     req.params.id,
     companyId
   );
-  res.status(StatusCodes40.OK).json({
+  res.status(StatusCodes41.OK).json({
     success: true,
     message: "Problem retrieved successfully.",
     data: problem
@@ -9168,7 +9232,7 @@ var updateProblem2 = catchAsync(async (req, res) => {
     companyId,
     req.body
   );
-  res.status(StatusCodes40.OK).json({
+  res.status(StatusCodes41.OK).json({
     success: true,
     message: "Problem updated successfully.",
     data: problem
@@ -9181,7 +9245,7 @@ var deleteProblem = catchAsync(async (req, res) => {
     req.params.id,
     companyId
   );
-  res.status(StatusCodes40.OK).json({
+  res.status(StatusCodes41.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -9338,10 +9402,10 @@ var problemRoutes = router13;
 import { Router as Router14 } from "express";
 
 // src/app/modules/result/result.controller.ts
-import { StatusCodes as StatusCodes42 } from "http-status-codes";
+import { StatusCodes as StatusCodes43 } from "http-status-codes";
 
 // src/app/modules/result/result.service.ts
-import { StatusCodes as StatusCodes41 } from "http-status-codes";
+import { StatusCodes as StatusCodes42 } from "http-status-codes";
 
 // src/app/modules/result/result.const.ts
 var RESULT_LEADERBOARD_SELECT = {
@@ -9373,7 +9437,7 @@ var getResultByAttemptId = async (attemptId, requester) => {
   } else if (requester.role !== "ADMIN") {
     if (!requester.companyId) {
       throw new appError_default(
-        StatusCodes41.FORBIDDEN,
+        StatusCodes42.FORBIDDEN,
         "Access denied. Missing company scope."
       );
     }
@@ -9387,11 +9451,11 @@ var getResultByAttemptId = async (attemptId, requester) => {
     }
   });
   if (!attempt) {
-    throw new appError_default(StatusCodes41.NOT_FOUND, "Attempt result not found.");
+    throw new appError_default(StatusCodes42.NOT_FOUND, "Attempt result not found.");
   }
   if (requester.role === "CANDIDATE" && !isResultReleasedToCandidate(attempt.assessment)) {
     throw new appError_default(
-      StatusCodes41.FORBIDDEN,
+      StatusCodes42.FORBIDDEN,
       "Results for this assessment haven't been released yet."
     );
   }
@@ -9401,7 +9465,7 @@ var getResultByAttemptId = async (attemptId, requester) => {
   });
   if (!result) {
     throw new appError_default(
-      StatusCodes41.NOT_FOUND,
+      StatusCodes42.NOT_FOUND,
       "Result not available yet \u2014 this attempt may not be finalized."
     );
   }
@@ -9412,7 +9476,7 @@ var getResultsForAssessment = async (assessmentId, companyId) => {
     where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId)
   });
   if (!assessment) {
-    throw new appError_default(StatusCodes41.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(StatusCodes42.NOT_FOUND, "Assessment not found.");
   }
   return prisma.result.findMany({
     where: { assessmentId },
@@ -9431,17 +9495,17 @@ var releaseResults = async (assessmentId, companyId, actorId) => {
     }
   });
   if (!assessment) {
-    throw new appError_default(StatusCodes41.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(StatusCodes42.NOT_FOUND, "Assessment not found.");
   }
   if (assessment.status === "DRAFT") {
     throw new appError_default(
-      StatusCodes41.CONFLICT,
+      StatusCodes42.CONFLICT,
       "Publish this assessment before releasing results."
     );
   }
   if (isResultReleasedToCandidate(assessment)) {
     throw new appError_default(
-      StatusCodes41.CONFLICT,
+      StatusCodes42.CONFLICT,
       "Results are already released to candidates."
     );
   }
@@ -9480,7 +9544,7 @@ var computeRanks = async (assessmentId, companyId) => {
     where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId)
   });
   if (!assessment) {
-    throw new appError_default(StatusCodes41.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(StatusCodes42.NOT_FOUND, "Assessment not found.");
   }
   const finalizedResults = await prisma.result.findMany({
     where: {
@@ -9496,7 +9560,7 @@ var computeRanks = async (assessmentId, companyId) => {
   });
   if (finalizedResults.length === 0) {
     throw new appError_default(
-      StatusCodes41.BAD_REQUEST,
+      StatusCodes42.BAD_REQUEST,
       "No fully-graded results to rank yet."
     );
   }
@@ -9542,7 +9606,7 @@ var getResultByAttemptId2 = catchAsync(async (req, res) => {
       ...companyId !== void 0 && { companyId }
     }
   );
-  res.status(StatusCodes42.OK).json({
+  res.status(StatusCodes43.OK).json({
     success: true,
     message: "Result retrieved successfully.",
     data: result
@@ -9556,7 +9620,7 @@ var getResultsForAssessment2 = catchAsync(
       req.params.assessmentId,
       companyId
     );
-    res.status(StatusCodes42.OK).json({
+    res.status(StatusCodes43.OK).json({
       success: true,
       message: "Results retrieved successfully.",
       data: results
@@ -9571,7 +9635,7 @@ var releaseResults2 = catchAsync(async (req, res) => {
     companyId,
     currentUser.id
   );
-  res.status(StatusCodes42.OK).json({
+  res.status(StatusCodes43.OK).json({
     success: true,
     message: "Results released to candidates.",
     data: result
@@ -9584,7 +9648,7 @@ var computeRanks2 = catchAsync(async (req, res) => {
     req.params.assessmentId,
     companyId
   );
-  res.status(StatusCodes42.OK).json({
+  res.status(StatusCodes43.OK).json({
     success: true,
     message: `Ranked ${result.ranked} result(s).`,
     data: result
@@ -9622,10 +9686,10 @@ var resultRoutes = router14;
 import { Router as Router15 } from "express";
 
 // src/app/modules/user/account.controller.ts
-import { StatusCodes as StatusCodes44 } from "http-status-codes";
+import { StatusCodes as StatusCodes45 } from "http-status-codes";
 
 // src/app/modules/user/account.service.ts
-import { StatusCodes as StatusCodes43 } from "http-status-codes";
+import { StatusCodes as StatusCodes44 } from "http-status-codes";
 var exportMyData = async (userId) => {
   const user = await prisma.user.findFirst({
     where: { id: userId, deletedAt: null },
@@ -9646,7 +9710,7 @@ var exportMyData = async (userId) => {
     }
   });
   if (!user) {
-    throw new appError_default(StatusCodes43.NOT_FOUND, "User not found.");
+    throw new appError_default(StatusCodes44.NOT_FOUND, "User not found.");
   }
   const [
     candidateProfile,
@@ -9820,23 +9884,23 @@ var deleteMyAccount = async (userId, confirmEmail) => {
     select: { id: true, email: true, role: true }
   });
   if (!user) {
-    throw new appError_default(StatusCodes43.NOT_FOUND, "User not found.");
+    throw new appError_default(StatusCodes44.NOT_FOUND, "User not found.");
   }
   if (user.role === "ADMIN") {
     throw new appError_default(
-      StatusCodes43.FORBIDDEN,
+      StatusCodes44.FORBIDDEN,
       "Admin accounts can't be deleted from here."
     );
   }
   if (user.role === "RECRUITER") {
     throw new appError_default(
-      StatusCodes43.CONFLICT,
+      StatusCodes44.CONFLICT,
       "Company accounts can't be deleted from here yet. Please contact us and we will help."
     );
   }
   if (confirmEmail.trim().toLowerCase() !== user.email.toLowerCase()) {
     throw new appError_default(
-      StatusCodes43.BAD_REQUEST,
+      StatusCodes44.BAD_REQUEST,
       "The email you typed doesn't match your account email."
     );
   }
@@ -9849,7 +9913,7 @@ var deleteMyAccount = async (userId, confirmEmail) => {
   });
   if (inProgress > 0) {
     throw new appError_default(
-      StatusCodes43.CONFLICT,
+      StatusCodes44.CONFLICT,
       "You have an assessment in progress. Submit it before deleting your account."
     );
   }
@@ -9883,7 +9947,7 @@ var exportMyData2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const data = await accountService.exportMyData(currentUser.id);
   res.setHeader("Cache-Control", "no-store");
-  res.status(StatusCodes44.OK).json({
+  res.status(StatusCodes45.OK).json({
     success: true,
     message: "Your data export is ready.",
     data
@@ -9895,7 +9959,7 @@ var deleteMyAccount2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.body.confirmEmail
   );
-  res.status(StatusCodes44.OK).json({
+  res.status(StatusCodes45.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -9911,10 +9975,10 @@ var deleteAccountSchema = z13.object({
 var accountValidation = { deleteAccountSchema };
 
 // src/app/modules/user/user.controller.ts
-import { StatusCodes as StatusCodes46 } from "http-status-codes";
+import { StatusCodes as StatusCodes47 } from "http-status-codes";
 
 // src/app/modules/user/user.service.ts
-import { StatusCodes as StatusCodes45 } from "http-status-codes";
+import { StatusCodes as StatusCodes46 } from "http-status-codes";
 
 // src/app/modules/user/user.const.ts
 var USER_PUBLIC_SELECT = {
@@ -9961,7 +10025,7 @@ var userQueryBuilder = new QueryBuilder(prisma.user, {
 var assertNotActingOnSelf = (actorId, targetId, action) => {
   if (actorId === targetId) {
     throw new appError_default(
-      StatusCodes45.FORBIDDEN,
+      StatusCodes46.FORBIDDEN,
       `You cannot ${action} your own account.`
     );
   }
@@ -9978,7 +10042,7 @@ var getUserById = async (id) => {
     select: USER_PUBLIC_SELECT
   });
   if (!user) {
-    throw new appError_default(StatusCodes45.NOT_FOUND, "User not found.");
+    throw new appError_default(StatusCodes46.NOT_FOUND, "User not found.");
   }
   return user;
 };
@@ -9990,7 +10054,7 @@ var updateProfile = async (id, payload, file) => {
     }
   });
   if (!existing) {
-    throw new appError_default(StatusCodes45.NOT_FOUND, "User not found.");
+    throw new appError_default(StatusCodes46.NOT_FOUND, "User not found.");
   }
   const updateData = {
     ...payload
@@ -10021,11 +10085,11 @@ var updateRole = async (id, role, actorId, actorRole) => {
     }
   });
   if (!existing) {
-    throw new appError_default(StatusCodes45.NOT_FOUND, "User not found.");
+    throw new appError_default(StatusCodes46.NOT_FOUND, "User not found.");
   }
   if ((role === "ADMIN" || existing.role === "ADMIN") && actorRole !== "ADMIN") {
     throw new appError_default(
-      StatusCodes45.FORBIDDEN,
+      StatusCodes46.FORBIDDEN,
       "Only an Admin can assign or modify Admin privileges."
     );
   }
@@ -10054,7 +10118,7 @@ var updateStatus = async (id, status, actorId) => {
     }
   });
   if (!existing) {
-    throw new appError_default(StatusCodes45.NOT_FOUND, "User not found.");
+    throw new appError_default(StatusCodes46.NOT_FOUND, "User not found.");
   }
   const updatedUser = await prisma.user.update({
     where: {
@@ -10084,7 +10148,7 @@ var softDeleteUser = async (id, actorId) => {
     }
   });
   if (!existing) {
-    throw new appError_default(StatusCodes45.NOT_FOUND, "User not found.");
+    throw new appError_default(StatusCodes46.NOT_FOUND, "User not found.");
   }
   await prisma.user.update({
     where: {
@@ -10114,7 +10178,7 @@ var getAllUsers2 = catchAsync(async (req, res) => {
   const result = await userService.getAllUsers(
     req.query
   );
-  res.status(StatusCodes46.OK).json({
+  res.status(StatusCodes47.OK).json({
     success: true,
     message: "Users retrieved successfully.",
     meta: result.meta,
@@ -10123,7 +10187,7 @@ var getAllUsers2 = catchAsync(async (req, res) => {
 });
 var getUserById2 = catchAsync(async (req, res) => {
   const user = await userService.getUserById(req.params.id);
-  res.status(StatusCodes46.OK).json({
+  res.status(StatusCodes47.OK).json({
     success: true,
     message: "User retrieved successfully.",
     data: user
@@ -10132,7 +10196,7 @@ var getUserById2 = catchAsync(async (req, res) => {
 var getMyProfile3 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const user = await userService.getUserById(currentUser.id);
-  res.status(StatusCodes46.OK).json({
+  res.status(StatusCodes47.OK).json({
     success: true,
     message: "Profile retrieved successfully.",
     data: user
@@ -10145,7 +10209,7 @@ var updateMyProfile = catchAsync(async (req, res) => {
     req.body,
     req.file
   );
-  res.status(StatusCodes46.OK).json({
+  res.status(StatusCodes47.OK).json({
     success: true,
     message: "Profile updated successfully.",
     data: user
@@ -10159,7 +10223,7 @@ var updateRole2 = catchAsync(async (req, res) => {
     currentUser.id,
     currentUser.role
   );
-  res.status(StatusCodes46.OK).json({
+  res.status(StatusCodes47.OK).json({
     success: true,
     message: "User role updated successfully.",
     data: user
@@ -10172,7 +10236,7 @@ var updateStatus2 = catchAsync(async (req, res) => {
     req.body.status,
     currentUser.id
   );
-  res.status(StatusCodes46.OK).json({
+  res.status(StatusCodes47.OK).json({
     success: true,
     message: "User status updated successfully.",
     data: user
@@ -10181,7 +10245,7 @@ var updateStatus2 = catchAsync(async (req, res) => {
 var deleteUser = catchAsync(async (req, res) => {
   const currentUser = req.user;
   await userService.softDeleteUser(req.params.id, currentUser.id);
-  res.status(StatusCodes46.OK).json({
+  res.status(StatusCodes47.OK).json({
     success: true,
     message: "User deleted successfully.",
     data: null
@@ -10235,10 +10299,10 @@ var userRoutes = router15;
 import { Router as Router16 } from "express";
 
 // src/app/modules/blog/blog.controller.ts
-import { StatusCodes as StatusCodes48 } from "http-status-codes";
+import { StatusCodes as StatusCodes49 } from "http-status-codes";
 
 // src/app/modules/blog/blog.service.ts
-import { StatusCodes as StatusCodes47 } from "http-status-codes";
+import { StatusCodes as StatusCodes48 } from "http-status-codes";
 
 // src/app/utils/readingTime.ts
 var WORDS_PER_MINUTE = 200;
@@ -10325,7 +10389,7 @@ var assertCategoryExists = async (categoryId) => {
     select: { id: true }
   });
   if (!category) {
-    throw new appError_default(StatusCodes47.BAD_REQUEST, "Blog category not found.");
+    throw new appError_default(StatusCodes48.BAD_REQUEST, "Blog category not found.");
   }
 };
 var publicPostWhere = (query) => {
@@ -10373,7 +10437,7 @@ var getPublishedPostBySlug = async (slug) => {
     select: BLOG_POST_DETAIL_SELECT
   });
   if (!post) {
-    throw new appError_default(StatusCodes47.NOT_FOUND, "Blog post not found.");
+    throw new appError_default(StatusCodes48.NOT_FOUND, "Blog post not found.");
   }
   const related = await prisma.blogPost.findMany({
     where: {
@@ -10421,7 +10485,7 @@ var getAuthor = async (id) => {
     select: BLOG_AUTHOR_PUBLIC_SELECT
   });
   if (!author) {
-    throw new appError_default(StatusCodes47.NOT_FOUND, "Author not found.");
+    throw new appError_default(StatusCodes48.NOT_FOUND, "Author not found.");
   }
   const postCount = await prisma.blogPost.count({
     where: { authorId: id, status: "PUBLISHED", deletedAt: null }
@@ -10457,7 +10521,7 @@ var getAdminPostById = async (id) => {
     select: BLOG_POST_DETAIL_SELECT
   });
   if (!post) {
-    throw new appError_default(StatusCodes47.NOT_FOUND, "Blog post not found.");
+    throw new appError_default(StatusCodes48.NOT_FOUND, "Blog post not found.");
   }
   return flattenTags(post);
 };
@@ -10491,7 +10555,7 @@ var updatePost = async (id, payload) => {
     select: { id: true }
   });
   if (!existing) {
-    throw new appError_default(StatusCodes47.NOT_FOUND, "Blog post not found.");
+    throw new appError_default(StatusCodes48.NOT_FOUND, "Blog post not found.");
   }
   if (payload.categoryId !== void 0) {
     await assertCategoryExists(payload.categoryId);
@@ -10524,7 +10588,7 @@ var publishPost = async (id, actorId) => {
     select: { id: true, status: true, publishedAt: true }
   });
   if (!existing) {
-    throw new appError_default(StatusCodes47.NOT_FOUND, "Blog post not found.");
+    throw new appError_default(StatusCodes48.NOT_FOUND, "Blog post not found.");
   }
   if (existing.status === "PUBLISHED") return getAdminPostById(id);
   await prisma.$transaction([
@@ -10552,7 +10616,7 @@ var unpublishPost = async (id, actorId) => {
     select: { id: true, status: true }
   });
   if (!existing) {
-    throw new appError_default(StatusCodes47.NOT_FOUND, "Blog post not found.");
+    throw new appError_default(StatusCodes48.NOT_FOUND, "Blog post not found.");
   }
   if (existing.status !== "PUBLISHED") return getAdminPostById(id);
   await prisma.$transaction([
@@ -10576,7 +10640,7 @@ var softDeletePost = async (id, actorId) => {
     select: { id: true, title: true }
   });
   if (!existing) {
-    throw new appError_default(StatusCodes47.NOT_FOUND, "Blog post not found.");
+    throw new appError_default(StatusCodes48.NOT_FOUND, "Blog post not found.");
   }
   await prisma.$transaction([
     prisma.blogPost.update({ where: { id }, data: { deletedAt: /* @__PURE__ */ new Date() } }),
@@ -10599,7 +10663,7 @@ var createCategory = async (payload) => {
   });
   if (duplicate) {
     throw new appError_default(
-      StatusCodes47.CONFLICT,
+      StatusCodes48.CONFLICT,
       "A category with this name already exists."
     );
   }
@@ -10625,7 +10689,7 @@ var updateCategory = async (id, payload) => {
     select: { id: true }
   });
   if (!existing) {
-    throw new appError_default(StatusCodes47.NOT_FOUND, "Blog category not found.");
+    throw new appError_default(StatusCodes48.NOT_FOUND, "Blog category not found.");
   }
   if (payload.name !== void 0) {
     const duplicate = await prisma.blogCategory.findFirst({
@@ -10637,7 +10701,7 @@ var updateCategory = async (id, payload) => {
     });
     if (duplicate) {
       throw new appError_default(
-        StatusCodes47.CONFLICT,
+        StatusCodes48.CONFLICT,
         "A category with this name already exists."
       );
     }
@@ -10660,12 +10724,12 @@ var deleteCategory = async (id) => {
     select: { id: true }
   });
   if (!existing) {
-    throw new appError_default(StatusCodes47.NOT_FOUND, "Blog category not found.");
+    throw new appError_default(StatusCodes48.NOT_FOUND, "Blog category not found.");
   }
   const postCount = await prisma.blogPost.count({ where: { categoryId: id } });
   if (postCount > 0) {
     throw new appError_default(
-      StatusCodes47.CONFLICT,
+      StatusCodes48.CONFLICT,
       "This category still has posts. Move them to another category first."
     );
   }
@@ -10674,7 +10738,7 @@ var deleteCategory = async (id) => {
 };
 var uploadCover = async (file) => {
   if (!file) {
-    throw new appError_default(StatusCodes47.BAD_REQUEST, "An image file is required.");
+    throw new appError_default(StatusCodes48.BAD_REQUEST, "An image file is required.");
   }
   const uploaded = await uploadFileToCloudinary(
     file.buffer,
@@ -10713,7 +10777,7 @@ var queryOf = (req) => req.query;
 var getPublishedPosts2 = catchAsync(async (req, res) => {
   const result = await blogService.getPublishedPosts(queryOf(req));
   setPublicCache(res);
-  res.status(StatusCodes48.OK).json({
+  res.status(StatusCodes49.OK).json({
     success: true,
     message: "Blog posts retrieved successfully.",
     meta: result.meta,
@@ -10723,7 +10787,7 @@ var getPublishedPosts2 = catchAsync(async (req, res) => {
 var getPublishedPostBySlug2 = catchAsync(async (req, res) => {
   const post = await blogService.getPublishedPostBySlug(req.params.slug);
   setPublicCache(res);
-  res.status(StatusCodes48.OK).json({
+  res.status(StatusCodes49.OK).json({
     success: true,
     message: "Blog post retrieved successfully.",
     data: post
@@ -10732,7 +10796,7 @@ var getPublishedPostBySlug2 = catchAsync(async (req, res) => {
 var getCategories2 = catchAsync(async (_req, res) => {
   const categories = await blogService.getCategories();
   setPublicCache(res);
-  res.status(StatusCodes48.OK).json({
+  res.status(StatusCodes49.OK).json({
     success: true,
     message: "Blog categories retrieved successfully.",
     data: categories
@@ -10741,7 +10805,7 @@ var getCategories2 = catchAsync(async (_req, res) => {
 var getTags2 = catchAsync(async (_req, res) => {
   const tags = await blogService.getTags();
   setPublicCache(res);
-  res.status(StatusCodes48.OK).json({
+  res.status(StatusCodes49.OK).json({
     success: true,
     message: "Blog tags retrieved successfully.",
     data: tags
@@ -10750,7 +10814,7 @@ var getTags2 = catchAsync(async (_req, res) => {
 var getAuthor2 = catchAsync(async (req, res) => {
   const author = await blogService.getAuthor(req.params.id);
   setPublicCache(res);
-  res.status(StatusCodes48.OK).json({
+  res.status(StatusCodes49.OK).json({
     success: true,
     message: "Author retrieved successfully.",
     data: author
@@ -10758,7 +10822,7 @@ var getAuthor2 = catchAsync(async (req, res) => {
 });
 var getAdminPosts2 = catchAsync(async (req, res) => {
   const result = await blogService.getAdminPosts(queryOf(req));
-  res.status(StatusCodes48.OK).json({
+  res.status(StatusCodes49.OK).json({
     success: true,
     message: "Blog posts retrieved successfully.",
     meta: result.meta,
@@ -10767,7 +10831,7 @@ var getAdminPosts2 = catchAsync(async (req, res) => {
 });
 var getAdminPostById2 = catchAsync(async (req, res) => {
   const post = await blogService.getAdminPostById(req.params.id);
-  res.status(StatusCodes48.OK).json({
+  res.status(StatusCodes49.OK).json({
     success: true,
     message: "Blog post retrieved successfully.",
     data: post
@@ -10776,7 +10840,7 @@ var getAdminPostById2 = catchAsync(async (req, res) => {
 var createPost2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const post = await blogService.createPost(currentUser.id, req.body);
-  res.status(StatusCodes48.CREATED).json({
+  res.status(StatusCodes49.CREATED).json({
     success: true,
     message: "Blog post created successfully.",
     data: post
@@ -10784,7 +10848,7 @@ var createPost2 = catchAsync(async (req, res) => {
 });
 var updatePost2 = catchAsync(async (req, res) => {
   const post = await blogService.updatePost(req.params.id, req.body);
-  res.status(StatusCodes48.OK).json({
+  res.status(StatusCodes49.OK).json({
     success: true,
     message: "Blog post updated successfully.",
     data: post
@@ -10793,7 +10857,7 @@ var updatePost2 = catchAsync(async (req, res) => {
 var publishPost2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const post = await blogService.publishPost(req.params.id, currentUser.id);
-  res.status(StatusCodes48.OK).json({
+  res.status(StatusCodes49.OK).json({
     success: true,
     message: "Blog post published.",
     data: post
@@ -10802,7 +10866,7 @@ var publishPost2 = catchAsync(async (req, res) => {
 var unpublishPost2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const post = await blogService.unpublishPost(req.params.id, currentUser.id);
-  res.status(StatusCodes48.OK).json({
+  res.status(StatusCodes49.OK).json({
     success: true,
     message: "Blog post moved back to draft.",
     data: post
@@ -10811,7 +10875,7 @@ var unpublishPost2 = catchAsync(async (req, res) => {
 var deletePost = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const result = await blogService.softDeletePost(req.params.id, currentUser.id);
-  res.status(StatusCodes48.OK).json({
+  res.status(StatusCodes49.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -10819,7 +10883,7 @@ var deletePost = catchAsync(async (req, res) => {
 });
 var createCategory2 = catchAsync(async (req, res) => {
   const category = await blogService.createCategory(req.body);
-  res.status(StatusCodes48.CREATED).json({
+  res.status(StatusCodes49.CREATED).json({
     success: true,
     message: "Blog category created successfully.",
     data: category
@@ -10827,7 +10891,7 @@ var createCategory2 = catchAsync(async (req, res) => {
 });
 var updateCategory2 = catchAsync(async (req, res) => {
   const category = await blogService.updateCategory(req.params.id, req.body);
-  res.status(StatusCodes48.OK).json({
+  res.status(StatusCodes49.OK).json({
     success: true,
     message: "Blog category updated successfully.",
     data: category
@@ -10835,7 +10899,7 @@ var updateCategory2 = catchAsync(async (req, res) => {
 });
 var deleteCategory2 = catchAsync(async (req, res) => {
   const result = await blogService.deleteCategory(req.params.id);
-  res.status(StatusCodes48.OK).json({
+  res.status(StatusCodes49.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -10843,7 +10907,7 @@ var deleteCategory2 = catchAsync(async (req, res) => {
 });
 var uploadCover2 = catchAsync(async (req, res) => {
   const result = await blogService.uploadCover(req.file);
-  res.status(StatusCodes48.CREATED).json({
+  res.status(StatusCodes49.CREATED).json({
     success: true,
     message: "Cover image uploaded successfully.",
     data: result
@@ -10945,10 +11009,10 @@ var blogRoutes = router16;
 import { Router as Router17 } from "express";
 
 // src/app/modules/contact/contact.controller.ts
-import { StatusCodes as StatusCodes50 } from "http-status-codes";
+import { StatusCodes as StatusCodes51 } from "http-status-codes";
 
 // src/app/modules/contact/contact.service.ts
-import { StatusCodes as StatusCodes49 } from "http-status-codes";
+import { StatusCodes as StatusCodes50 } from "http-status-codes";
 
 // src/app/modules/contact/contact.const.ts
 var CONTACT_MESSAGE_SELECT = {
@@ -11060,7 +11124,7 @@ var updateStatus3 = async (id, payload) => {
     select: { id: true }
   });
   if (!existing) {
-    throw new appError_default(StatusCodes49.NOT_FOUND, "Message not found.");
+    throw new appError_default(StatusCodes50.NOT_FOUND, "Message not found.");
   }
   return prisma.contactMessage.update({
     where: { id },
@@ -11077,7 +11141,7 @@ var deleteMessage = async (id) => {
     select: { id: true }
   });
   if (!existing) {
-    throw new appError_default(StatusCodes49.NOT_FOUND, "Message not found.");
+    throw new appError_default(StatusCodes50.NOT_FOUND, "Message not found.");
   }
   await prisma.contactMessage.delete({ where: { id } });
   return { message: "Message deleted successfully." };
@@ -11092,7 +11156,7 @@ var contactService = {
 // src/app/modules/contact/contact.controller.ts
 var createMessage2 = catchAsync(async (req, res) => {
   const result = await contactService.createMessage(req.body);
-  res.status(StatusCodes50.CREATED).json({
+  res.status(StatusCodes51.CREATED).json({
     success: true,
     message: "Thanks! Your message has been sent.",
     data: result
@@ -11102,7 +11166,7 @@ var getMessages2 = catchAsync(async (req, res) => {
   const result = await contactService.getMessages(
     req.query
   );
-  res.status(StatusCodes50.OK).json({
+  res.status(StatusCodes51.OK).json({
     success: true,
     message: "Messages retrieved successfully.",
     meta: result.meta,
@@ -11114,7 +11178,7 @@ var updateStatus4 = catchAsync(async (req, res) => {
     req.params.id,
     req.body
   );
-  res.status(StatusCodes50.OK).json({
+  res.status(StatusCodes51.OK).json({
     success: true,
     message: "Message updated successfully.",
     data: message
@@ -11122,7 +11186,7 @@ var updateStatus4 = catchAsync(async (req, res) => {
 });
 var deleteMessage2 = catchAsync(async (req, res) => {
   const result = await contactService.deleteMessage(req.params.id);
-  res.status(StatusCodes50.OK).json({
+  res.status(StatusCodes51.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -11177,14 +11241,14 @@ var contactRoutes = router17;
 import { Router as Router18 } from "express";
 
 // src/app/middlewares/requireAutomationApiKey.ts
-import { StatusCodes as StatusCodes51 } from "http-status-codes";
+import { StatusCodes as StatusCodes52 } from "http-status-codes";
 var requireAutomationApiKey = (req, _res, next) => {
   const expected = config_default.n8n.apiKey;
   const provided = req.header("x-api-key");
   if (!expected || !provided || !safeEqual(provided, expected)) {
     return next(
       new appError_default(
-        StatusCodes51.UNAUTHORIZED,
+        StatusCodes52.UNAUTHORIZED,
         "Invalid or missing API key.",
         "INVALID_API_KEY"
       )
@@ -11194,7 +11258,7 @@ var requireAutomationApiKey = (req, _res, next) => {
 };
 
 // src/app/modules/automation/automation.controller.ts
-import { StatusCodes as StatusCodes53 } from "http-status-codes";
+import { StatusCodes as StatusCodes54 } from "http-status-codes";
 
 // src/app/utils/sendResponse.ts
 var sendResponse = (res, payload) => {
@@ -11203,7 +11267,7 @@ var sendResponse = (res, payload) => {
 };
 
 // src/app/modules/automation/automation.ai.ts
-import { StatusCodes as StatusCodes52 } from "http-status-codes";
+import { StatusCodes as StatusCodes53 } from "http-status-codes";
 var loadWrittenSubmission = async (submissionId) => {
   const submission = await prisma.submission.findUnique({
     where: { id: submissionId },
@@ -11228,11 +11292,11 @@ var loadWrittenSubmission = async (submissionId) => {
     }
   });
   if (!submission) {
-    throw new appError_default(StatusCodes52.NOT_FOUND, "Submission not found.");
+    throw new appError_default(StatusCodes53.NOT_FOUND, "Submission not found.");
   }
   if (submission.problem.type !== "WRITTEN") {
     throw new appError_default(
-      StatusCodes52.BAD_REQUEST,
+      StatusCodes53.BAD_REQUEST,
       "AI evaluation is only available for WRITTEN problems."
     );
   }
@@ -11276,17 +11340,17 @@ var getAiInput = async (submissionId) => {
 var saveAiResult = async (submissionId, input) => {
   const submission = await loadWrittenSubmission(submissionId);
   if (!submission.evaluation) {
-    throw new appError_default(StatusCodes52.CONFLICT, "Submission has no evaluation yet.");
+    throw new appError_default(StatusCodes53.CONFLICT, "Submission has no evaluation yet.");
   }
   if (submission.evaluation.status !== "PENDING" || submission.evaluation.reviewStatus === "APPROVED" || submission.evaluation.reviewStatus === "OVERRIDDEN") {
     throw new appError_default(
-      StatusCodes52.CONFLICT,
+      StatusCodes53.CONFLICT,
       "This submission was already graded by a recruiter."
     );
   }
   if (input.aiScore > submission.evaluation.maxScore) {
     throw new appError_default(
-      StatusCodes52.BAD_REQUEST,
+      StatusCodes53.BAD_REQUEST,
       `aiScore cannot exceed the maximum marks (${submission.evaluation.maxScore}).`
     );
   }
@@ -11477,7 +11541,7 @@ var dispatch = catchAsync(async (_req, res) => {
   const result = await automationService.dispatchPendingEvents();
   sendResponse(res, {
     success: true,
-    statusCode: StatusCodes53.OK,
+    statusCode: StatusCodes54.OK,
     message: "Automation events dispatched.",
     data: result
   });
@@ -11486,7 +11550,7 @@ var runMaintenance2 = catchAsync(async (_req, res) => {
   const result = await automationMaintenance.runMaintenance();
   sendResponse(res, {
     success: true,
-    statusCode: StatusCodes53.OK,
+    statusCode: StatusCodes54.OK,
     message: "Maintenance run completed.",
     data: result
   });
@@ -11495,7 +11559,7 @@ var getAiInput2 = catchAsync(async (req, res) => {
   const result = await automationAi.getAiInput(req.params.id);
   sendResponse(res, {
     success: true,
-    statusCode: StatusCodes53.OK,
+    statusCode: StatusCodes54.OK,
     message: "AI input retrieved.",
     data: result
   });
@@ -11507,7 +11571,7 @@ var saveAiResult2 = catchAsync(async (req, res) => {
   );
   sendResponse(res, {
     success: true,
-    statusCode: StatusCodes53.OK,
+    statusCode: StatusCodes54.OK,
     message: "AI result saved.",
     data: result
   });
@@ -11547,10 +11611,10 @@ var automationRoutes = router18;
 import { Router as Router19 } from "express";
 
 // src/app/modules/automation/automation.extra.controller.ts
-import { StatusCodes as StatusCodes56 } from "http-status-codes";
+import { StatusCodes as StatusCodes57 } from "http-status-codes";
 
 // src/app/modules/automation/automation.admin.ts
-import { StatusCodes as StatusCodes54 } from "http-status-codes";
+import { StatusCodes as StatusCodes55 } from "http-status-codes";
 var STATUSES = ["PENDING", "PROCESSING", "DELIVERED", "FAILED"];
 var EVENT_LIST_SELECT = {
   id: true,
@@ -11646,10 +11710,10 @@ var retryEvent = async (id) => {
       select: { status: true }
     });
     if (!exists) {
-      throw new appError_default(StatusCodes54.NOT_FOUND, "Automation event not found.");
+      throw new appError_default(StatusCodes55.NOT_FOUND, "Automation event not found.");
     }
     throw new appError_default(
-      StatusCodes54.CONFLICT,
+      StatusCodes55.CONFLICT,
       "Only FAILED events can be retried.",
       "EVENT_NOT_FAILED"
     );
@@ -11662,7 +11726,7 @@ var retryEvent = async (id) => {
 var automationAdmin = { listEvents, getStats, retryEvent };
 
 // src/app/modules/automation/automation.report.ts
-import { StatusCodes as StatusCodes55 } from "http-status-codes";
+import { StatusCodes as StatusCodes56 } from "http-status-codes";
 var PROCTORING_HIGH_RISK_EVENT = "proctoring.high_risk";
 var HEURISTIC_MODEL_NAME = "heuristic";
 var RISK_WEIGHTS = {
@@ -11725,7 +11789,7 @@ var findAttemptOrThrow = async (attemptId) => {
     }
   });
   if (!attempt) {
-    throw new appError_default(StatusCodes55.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(StatusCodes56.NOT_FOUND, "Attempt not found.");
   }
   return attempt;
 };
@@ -11733,7 +11797,7 @@ var getReportInput = async (attemptId) => {
   const attempt = await findAttemptOrThrow(attemptId);
   if (attempt.status === "IN_PROGRESS" || attempt.status === "NOT_STARTED") {
     throw new appError_default(
-      StatusCodes55.CONFLICT,
+      StatusCodes56.CONFLICT,
       "Attempt is not finished yet.",
       "ATTEMPT_NOT_FINISHED"
     );
@@ -11787,7 +11851,7 @@ var saveReportResult = async (attemptId, input) => {
   const isHeuristic = input.aiModel === HEURISTIC_MODEL_NAME;
   if (!isHeuristic && !await hasAiConsent(attempt.candidateId)) {
     throw new appError_default(
-      StatusCodes55.FORBIDDEN,
+      StatusCodes56.FORBIDDEN,
       "Candidate has not granted AI processing consent.",
       "AI_CONSENT_REQUIRED"
     );
@@ -11861,7 +11925,7 @@ var getReportInput2 = catchAsync(async (req, res) => {
   const data = await automationReport.getReportInput(idParam(req));
   sendResponse(res, {
     success: true,
-    statusCode: StatusCodes56.OK,
+    statusCode: StatusCodes57.OK,
     message: "Report input fetched.",
     data
   });
@@ -11870,7 +11934,7 @@ var saveReportResult2 = catchAsync(async (req, res) => {
   const data = await automationReport.saveReportResult(idParam(req), req.body);
   sendResponse(res, {
     success: true,
-    statusCode: StatusCodes56.OK,
+    statusCode: StatusCodes57.OK,
     message: "Report saved.",
     data
   });
@@ -11881,7 +11945,7 @@ var listEvents2 = catchAsync(async (req, res) => {
   );
   sendResponse(res, {
     success: true,
-    statusCode: StatusCodes56.OK,
+    statusCode: StatusCodes57.OK,
     message: "Automation events fetched.",
     data: rows,
     meta
@@ -11891,7 +11955,7 @@ var getStats2 = catchAsync(async (_req, res) => {
   const data = await automationAdmin.getStats();
   sendResponse(res, {
     success: true,
-    statusCode: StatusCodes56.OK,
+    statusCode: StatusCodes57.OK,
     message: "Automation stats fetched.",
     data
   });
@@ -11900,7 +11964,7 @@ var retryEvent2 = catchAsync(async (req, res) => {
   const data = await automationAdmin.retryEvent(idParam(req));
   sendResponse(res, {
     success: true,
-    statusCode: StatusCodes56.OK,
+    statusCode: StatusCodes57.OK,
     message: "Event queued for retry.",
     data
   });
@@ -11946,10 +12010,99 @@ adminRouter3.post("/events/:id/retry", automationExtraController.retryEvent);
 var automationInternalExtraRoutes = internalRouter;
 var automationAdminRoutes = adminRouter3;
 
-// src/app/routes/index.ts
+// src/app/modules/demo/demo.routes.ts
+import { Router as Router20 } from "express";
+
+// src/app/modules/demo/demo.controller.ts
+import { fromNodeHeaders as fromNodeHeaders4 } from "better-auth/node";
+import { StatusCodes as StatusCodes59 } from "http-status-codes";
+import { z as z18 } from "zod";
+
+// src/app/modules/demo/demo.service.ts
+import { StatusCodes as StatusCodes58 } from "http-status-codes";
+var isDemoEnabled = () => config_default.demo.enabled;
+var ensureDemoUser = async (key) => {
+  const demo = DEMO_ACCOUNTS[key];
+  let user = await prisma.user.findUnique({ where: { email: demo.email } });
+  if (!user) {
+    await auth.api.signUpEmail({
+      body: { name: demo.name, email: demo.email, password: DEMO_PASSWORD }
+    });
+    user = await prisma.user.findUniqueOrThrow({
+      where: { email: demo.email }
+    });
+  }
+  if (user.role !== demo.role || !user.emailVerified || user.status !== "ACTIVE" || user.deletedAt) {
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        role: demo.role,
+        status: "ACTIVE",
+        emailVerified: true,
+        deletedAt: null
+      }
+    });
+  }
+};
+var demoLogin = async (key, headers) => {
+  if (!isDemoEnabled()) {
+    throw new appError_default(StatusCodes58.NOT_FOUND, "Demo access is not enabled.");
+  }
+  await ensureDemoUser(key);
+  const response = await auth.api.signInEmail({
+    body: { email: DEMO_ACCOUNTS[key].email, password: DEMO_PASSWORD },
+    headers,
+    asResponse: true
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new appError_default(
+      response.status,
+      body?.message ?? "Could not start the demo session."
+    );
+  }
+  return {
+    data: body,
+    headers: response.headers
+  };
+};
+var demoService = { demoLogin };
+
+// src/app/modules/demo/demo.controller.ts
+var demoLoginSchema = z18.object({
+  body: z18.object({
+    role: z18.enum(["CANDIDATE", "RECRUITER", "ADMIN"])
+  })
+});
+var demoLogin2 = catchAsync(async (req, res) => {
+  const { data, headers } = await demoService.demoLogin(
+    req.body.role,
+    fromNodeHeaders4(req.headers)
+  );
+  applyAuthCookies(headers, res);
+  res.status(StatusCodes59.OK).json({
+    success: true,
+    message: "Demo session started.",
+    data
+  });
+});
+var demoController = { demoLogin: demoLogin2 };
+
+// src/app/modules/demo/demo.routes.ts
 var router19 = Router20();
+router19.post(
+  "/login",
+  publicRateLimiter,
+  validateRequest(demoLoginSchema),
+  demoController.demoLogin
+);
+var demoRoutes = router19;
+
+// src/app/routes/index.ts
+var router20 = Router21();
 var moduleRoutes = [
   { path: "/auth", route: authRoutes },
+  { path: "/demo", route: demoRoutes },
   { path: "/users", route: userRoutes },
   { path: "/companies", route: companyRoutes },
   { path: "/candidates", route: candidateRoutes },
@@ -11971,9 +12124,9 @@ var moduleRoutes = [
   { path: "/internal/automation", route: automationInternalExtraRoutes }
 ];
 for (const { path: path2, route } of moduleRoutes) {
-  router19.use(path2, route);
+  router20.use(path2, route);
 }
-var globalRoutes = router19;
+var globalRoutes = router20;
 
 // src/app.ts
 var app = express2();
@@ -12007,6 +12160,7 @@ app.use(
   })
 );
 app.use("/api/v1/webhooks", webhookRoutes);
+app.use("/api", demoGuard);
 app.use("/api/auth/sign-in", authRateLimiter);
 app.use("/api/auth/sign-up", authRateLimiter);
 app.use("/api/auth/forget-password", authRateLimiter);

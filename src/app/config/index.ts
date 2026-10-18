@@ -65,6 +65,11 @@ const envSchema = z.object({
     .default("false")
     .transform((value) => value === "true"),
   GEMINI_API_KEY: z.string().min(20).optional(),
+
+  DEMO_MODE_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -164,6 +169,10 @@ const config = {
   },
   gemini: {
     apiKey: env.GEMINI_API_KEY,
+  },
+
+  demo: {
+    enabled: env.DEMO_MODE_ENABLED,
   },
 } as const;
 

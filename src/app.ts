@@ -15,6 +15,8 @@ import helmet from "helmet";
 
 import config from "./app/config";
 
+import { demoGuard } from "./app/middlewares/demoGuard";
+
 import { forceHttps } from "./app/middlewares/forceHttps";
 
 import { globalErrorHandler } from "./app/middlewares/globalErrorHandler";
@@ -79,6 +81,10 @@ app.use(
 );
 
 app.use("/api/v1/webhooks", webhookRoutes);
+
+// Blocks credential changes and (for the demo admin) all writes on the shared
+// demo accounts. Must stay before the Better Auth handler below.
+app.use("/api", demoGuard);
 
 app.use("/api/auth/sign-in", authRateLimiter);
 app.use("/api/auth/sign-up", authRateLimiter);

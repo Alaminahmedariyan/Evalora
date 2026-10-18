@@ -20,11 +20,13 @@ import {
   automationAdminRoutes,
   automationInternalExtraRoutes,
 } from "../modules/automation/automation.extra.routes";
+import { demoRoutes } from "../modules/demo/demo.routes";
 
 const router = Router();
 
 const moduleRoutes = [
   { path: "/auth", route: authRoutes },
+  { path: "/demo", route: demoRoutes },
   { path: "/users", route: userRoutes },
   { path: "/companies", route: companyRoutes },
   { path: "/candidates", route: candidateRoutes },
