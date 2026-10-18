@@ -11961,14 +11961,14 @@ var moduleRoutes = [
   { path: "/results", route: resultRoutes },
   { path: "/payments", route: paymentRoutes },
   { path: "/notifications", route: notificationRoutes },
+  // Must come before "/admin" so adminRoutes does not swallow it.
+  { path: "/admin/automation", route: automationAdminRoutes },
   { path: "/admin", route: adminRoutes },
   { path: "/consents", route: consentRoutes },
   { path: "/blog", route: blogRoutes },
   { path: "/contact", route: contactRoutes },
   { path: "/internal/automation", route: automationRoutes },
-  { path: "/internal/automation", route: automationInternalExtraRoutes },
-  { path: "/admin/automation", route: automationAdminRoutes },
-  { path: "/ai", route: adminRoutes }
+  { path: "/internal/automation", route: automationInternalExtraRoutes }
 ];
 for (const { path: path2, route } of moduleRoutes) {
   router19.use(path2, route);

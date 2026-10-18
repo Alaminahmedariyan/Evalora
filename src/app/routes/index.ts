@@ -16,7 +16,10 @@ import { userRoutes } from "../modules/user/user.routes";
 import { blogRoutes } from "../modules/blog/blog.routes";
 import { contactRoutes } from "../modules/contact/contact.routes";
 import { automationRoutes } from "../modules/automation/automation.routes";
-import { automationAdminRoutes, automationInternalExtraRoutes } from "../modules/automation/automation.extra.routes";
+import {
+  automationAdminRoutes,
+  automationInternalExtraRoutes,
+} from "../modules/automation/automation.extra.routes";
 
 const router = Router();
 
@@ -33,14 +36,14 @@ const moduleRoutes = [
   { path: "/results", route: resultRoutes },
   { path: "/payments", route: paymentRoutes },
   { path: "/notifications", route: notificationRoutes },
+  // Must come before "/admin" so adminRoutes does not swallow it.
+  { path: "/admin/automation", route: automationAdminRoutes },
   { path: "/admin", route: adminRoutes },
   { path: "/consents", route: consentRoutes },
   { path: "/blog", route: blogRoutes },
   { path: "/contact", route: contactRoutes },
   { path: "/internal/automation", route: automationRoutes },
   { path: "/internal/automation", route: automationInternalExtraRoutes },
-  { path: "/admin/automation", route: automationAdminRoutes },
-  { path: "/ai", route: adminRoutes },
 ];
 
 for (const { path, route } of moduleRoutes) {
