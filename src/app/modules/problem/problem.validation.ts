@@ -63,13 +63,14 @@ const codingCreateSchema = z.object({
 const writtenCreateSchema = z.object({
 	...baseFields,
 	type: z.literal("WRITTEN"),
+	rubric: z.string().trim().min(10).max(5000).optional(),
 });
 
 /**
  * The per-type shape (options required for MCQ, testCases for CODING) is
  * enforced by the discriminated union itself. The cross-field rules that
- * a union alone can't express — unique option order, at least one correct
- * option, single-choice having exactly one — are enforced in superRefine
+ * a union alone can't express - unique option order, at least one correct
+ * option, single-choice having exactly one - are enforced in superRefine
  * below, which runs after the union has already picked a branch.
  */
 export const createProblemSchema = z
@@ -114,7 +115,7 @@ export const createProblemSchema = z
 
 /**
  * `type` can't change after creation (see problem.interface.ts). Nested
- * `options`/`testCases`, when provided, fully replace the existing set —
+ * `options`/`testCases`, when provided, fully replace the existing set -
  * see problem.service.ts#updateProblem for how that's done safely against
  * the onDelete: Restrict foreign keys from SubmissionAnswer/TestCaseResult.
  */
@@ -122,6 +123,7 @@ export const updateProblemSchema = z
 	.object({
 		title: z.string().trim().min(3).max(200).optional(),
 		description: z.string().trim().min(10).max(10000).optional(),
+		rubric: z.string().trim().min(10).max(5000).optional(),
 		difficulty: z.enum(["EASY", "MEDIUM", "HARD"]).optional(),
 		defaultMarks: z.coerce.number().int().min(1).max(1000).optional(),
 		isPublic: z.boolean().optional(),

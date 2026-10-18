@@ -1,12 +1,14 @@
 /**
- * Full detail including nested MCQ options / test cases — used for single-
- * problem view and immediately after create/update.
+ * Full detail including nested MCQ options / test cases - used for single-
+ * problem view and immediately after create/update. This is the
+ * recruiter/admin view, so it includes the grading rubric.
  */
 export const PROBLEM_DETAIL_SELECT = {
 	id: true,
 	title: true,
 	slug: true,
 	description: true,
+	rubric: true,
 	type: true,
 	difficulty: true,
 	defaultMarks: true,
@@ -42,7 +44,7 @@ export const PROBLEM_DETAIL_SELECT = {
 } as const;
 
 /**
- * Lean shape for browse/search — no nested options/test cases, so listing
+ * Lean shape for browse/search - no nested options/test cases, so listing
  * a company's whole problem bank doesn't ship megabytes of test data.
  */
 export const PROBLEM_LIST_SELECT = {

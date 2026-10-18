@@ -103,13 +103,17 @@ const createProblem = async (
     }
 
     return prisma.problem.create({
-        data: { ...baseData, type: "WRITTEN" },
+        data: {
+            ...baseData,
+            type: "WRITTEN",
+            ...(payload.rubric !== undefined && { rubric: payload.rubric }),
+        },
         select: PROBLEM_DETAIL_SELECT,
     });
 };
 
 /**
- * `companyId` undefined means "don't scope" — used for ADMIN, who can
+ * `companyId` undefined means "don't scope" - used for ADMIN, who can
  * browse every company's problem bank. RECRUITER always passes their own
  * companyId.
  */
@@ -156,6 +160,13 @@ const updateProblem = async (
 
     if (!existing) {
         throw new AppError(StatusCodes.NOT_FOUND, "Problem not found.");
+    }
+
+    if (payload.rubric !== undefined && existing.type !== "WRITTEN") {
+        throw new AppError(
+            StatusCodes.BAD_REQUEST,
+            "A rubric can only be set on a WRITTEN problem.",
+        );
     }
 
     const { options, testCases, mcqType, explanation, ...topLevel } = payload;

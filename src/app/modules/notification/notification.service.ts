@@ -10,89 +10,91 @@ import { QueryBuilder } from "../../queryBuilder";
 import { NOTIFICATION_SELECT } from "./notification.const";
 
 const notificationQueryBuilder = new QueryBuilder<
-	Prisma.NotificationGetPayload<{ select: typeof NOTIFICATION_SELECT }>,
-	NotificationWhereInput
+  Prisma.NotificationGetPayload<{ select: typeof NOTIFICATION_SELECT }>,
+  NotificationWhereInput
 >(prisma.notification, {
-	searchableFields: ["title", "message"],
-	filterableFields: {
-		isRead: "boolean",
-		type: {
-			type: "enum",
-			enum: {
-				ASSESSMENT_INVITATION: "ASSESSMENT_INVITATION",
-				ASSESSMENT_REMINDER: "ASSESSMENT_REMINDER",
-				ASSESSMENT_RESULT: "ASSESSMENT_RESULT",
-				ATTEMPT_SUBMITTED: "ATTEMPT_SUBMITTED",
-				ATTEMPT_EVALUATED: "ATTEMPT_EVALUATED",
-				PAYMENT_SUCCESS: "PAYMENT_SUCCESS",
-				PAYMENT_FAILED: "PAYMENT_FAILED",
-				SYSTEM: "SYSTEM",
-			},
-		},
-		createdAt: "date",
-	},
-	sortableFields: ["createdAt"],
-	selectableFields: Object.keys(NOTIFICATION_SELECT),
-	defaultSelect: NOTIFICATION_SELECT,
-	defaultSortField: "createdAt",
+  searchableFields: ["title", "message"],
+  filterableFields: {
+    isRead: "boolean",
+    type: {
+      type: "enum",
+      enum: {
+        ASSESSMENT_INVITATION: "ASSESSMENT_INVITATION",
+        ASSESSMENT_REMINDER: "ASSESSMENT_REMINDER",
+        ASSESSMENT_RESULT: "ASSESSMENT_RESULT",
+        ATTEMPT_SUBMITTED: "ATTEMPT_SUBMITTED",
+        ATTEMPT_EVALUATED: "ATTEMPT_EVALUATED",
+        PAYMENT_SUCCESS: "PAYMENT_SUCCESS",
+        PAYMENT_FAILED: "PAYMENT_FAILED",
+        SYSTEM: "SYSTEM",
+        PROCTORING_ALERT: "PROCTORING_ALERT",
+        EVALUATION_REVIEW_NEEDED: "EVALUATION_REVIEW_NEEDED",
+      },
+    },
+    createdAt: "date",
+  },
+  sortableFields: ["createdAt"],
+  selectableFields: Object.keys(NOTIFICATION_SELECT),
+  defaultSelect: NOTIFICATION_SELECT,
+  defaultSortField: "createdAt",
 });
 
 const getMyNotifications = async (
-	userId: string,
-	query: Record<string, unknown>,
+  userId: string,
+  query: Record<string, unknown>,
 ) => {
-	return notificationQueryBuilder.execute(query, { userId });
+  return notificationQueryBuilder.execute(query, { userId });
 };
 
 const getUnreadCount = async (userId: string) => {
-	const unreadCount = await prisma.notification.count({
-		where: { userId, isRead: false },
-	});
-	return { unreadCount };
+  const unreadCount = await prisma.notification.count({
+    where: { userId, isRead: false },
+  });
+  return { unreadCount };
 };
 
 const markAsRead = async (id: string, userId: string) => {
-	const notification = await prisma.notification.findFirst({
-		where: { id, userId },
-	});
+  const notification = await prisma.notification.findFirst({
+    where: { id, userId },
+  });
 
-	if (!notification) {
-		throw new AppError(StatusCodes.NOT_FOUND, "Notification not found.");
-	}
+  if (!notification) {
+    throw new AppError(StatusCodes.NOT_FOUND, "Notification not found.");
+  }
 
-	return prisma.notification.update({
-		where: { id },
-		data: { isRead: true },
-		select: NOTIFICATION_SELECT,
-	});
+  return prisma.notification.update({
+    where: { id },
+    data: { isRead: true },
+    select: NOTIFICATION_SELECT,
+  });
 };
 
 const markAllAsRead = async (userId: string) => {
-	const result = await prisma.notification.updateMany({
-		where: { userId, isRead: false },
-		data: { isRead: true },
-	});
-	return { updated: result.count };
+  const result = await prisma.notification.updateMany({
+    where: { userId, isRead: false },
+    data: { isRead: true },
+  });
+  return { updated: result.count };
 };
 
 const deleteNotification = async (id: string, userId: string) => {
-	const notification = await prisma.notification.findFirst({
-		where: { id, userId },
-	});
+  const notification = await prisma.notification.findFirst({
+    where: { id, userId },
+  });
 
-	if (!notification) {
-		throw new AppError(StatusCodes.NOT_FOUND, "Notification not found.");
-	}
+  if (!notification) {
+    throw new AppError(StatusCodes.NOT_FOUND, "Notification not found.");
+  }
 
-	await prisma.notification.delete({ where: { id } });
+  await prisma.notification.delete({ where: { id } });
 
-	return { message: "Notification deleted successfully." };
+  return { message: "Notification deleted successfully." };
 };
 
 export const notificationService = {
-	getMyNotifications,
-	getUnreadCount,
-	markAsRead,
-	markAllAsRead,
-	deleteNotification,
+  getMyNotifications,
+  getUnreadCount,
+  markAsRead,
+  markAllAsRead,
+  deleteNotification,
 };

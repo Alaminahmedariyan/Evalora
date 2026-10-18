@@ -35,16 +35,18 @@ export type CreateProblemInput =
 			timeLimitSeconds?: number;
 			testCases: TestCaseInput[];
 	  })
-	| (BaseProblemFields & { type: "WRITTEN" });
+	| (BaseProblemFields & { type: "WRITTEN"; rubric?: string });
 
 /**
- * `type` is intentionally excluded — switching a problem from MCQ to
+ * `type` is intentionally excluded - switching a problem from MCQ to
  * CODING (or similar) after creation would orphan its nested data, so it's
  * treated as immutable. Create a new problem instead.
+ * `rubric` only applies to WRITTEN problems.
  */
 export type UpdateProblemInput = Partial<{
 	title: string;
 	description: string;
+	rubric: string;
 	difficulty: Difficulty;
 	defaultMarks: number;
 	isPublic: boolean;

@@ -13,4 +13,5 @@ export const AUTOMATION_EVENT_TYPES = {
 	ATTEMPT_AUTO_SUBMITTED: "attempt.auto_submitted",
 	INVITATION_CREATED: "invitation.created",
 	SUBMISSION_NEEDS_AI_EVALUATION: "submission.needs_ai_evaluation",
+	EVALUATION_REVIEW_NEEDED: "evaluation.review_needed",
 } as const;

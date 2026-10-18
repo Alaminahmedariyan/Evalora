@@ -1,0 +1,1923 @@
+
+===== src/app/routes/index.ts =====
+import { Router } from "express";
+import { adminRoutes } from "../modules/admin/admin.routes";
+import { assessmentRoutes } from "../modules/assessment/assessment.routes";
+import { attemptRoutes } from "../modules/attempt/attempt.routes";
+import { authRoutes } from "../modules/auth/auth.routes";
+import { candidateRoutes } from "../modules/candidate/candidate.routes";
+import { companyRoutes } from "../modules/company/company.routes";
+import { consentRoutes } from "../modules/consent/consent.routes";
+import { evaluationRoutes } from "../modules/evaluation/evaluation.routes";
+import { invitationRoutes } from "../modules/invitation/invitation.routes";
+import { notificationRoutes } from "../modules/notification/notification.routes";
+import { paymentRoutes } from "../modules/payment/payment.routes";
+import { problemRoutes } from "../modules/problem/problem.routes";
+import { resultRoutes } from "../modules/result/result.routes";
+import { userRoutes } from "../modules/user/user.routes";
+import { blogRoutes } from "../modules/blog/blog.routes";
+import { contactRoutes } from "../modules/contact/contact.routes";
+import { automationRoutes } from "../modules/automation/automation.routes";
+
+const router = Router();
+
+const moduleRoutes = [
+  { path: "/auth", route: authRoutes },
+  { path: "/users", route: userRoutes },
+  { path: "/companies", route: companyRoutes },
+  { path: "/candidates", route: candidateRoutes },
+  { path: "/problems", route: problemRoutes },
+  { path: "/assessments", route: assessmentRoutes },
+  { path: "/invitations", route: invitationRoutes },
+  { path: "/attempts", route: attemptRoutes },
+  { path: "/evaluations", route: evaluationRoutes },
+  { path: "/results", route: resultRoutes },
+  { path: "/payments", route: paymentRoutes },
+  { path: "/notifications", route: notificationRoutes },
+  { path: "/admin", route: adminRoutes },
+  { path: "/consents", route: consentRoutes },
+  { path: "/blog", route: blogRoutes },
+  { path: "/contact", route: contactRoutes },
+    { path: "/internal/automation", route: automationRoutes },
+];
+
+for (const { path, route } of moduleRoutes) {
+  router.use(path, route);
+}
+
+export const globalRoutes = router;
+
+
+===== src/app/config/index.ts =====
+
+import "dotenv/config";
+import { z } from "zod";
+
+const envSchema = z.object({
+  NODE_ENV: z
+    .enum(["development", "production", "test"])
+    .default("development"),
+
+  PORT: z.coerce.number().default(5000),
+  CLIENT_URL: z.string().url(),
+  DATABASE_URL: z.string().min(1, "DATABASE_URL is required."),
+
+  BETTER_AUTH_SECRET: z.string().min(16).optional(),
+  BETTER_AUTH_URL: z.string().url().optional(),
+
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+
+  GITHUB_CLIENT_ID: z.string().optional(),
+  GITHUB_CLIENT_SECRET: z.string().optional(),
+
+  CLOUDINARY_CLOUD_NAME: z.string().optional(),
+  CLOUDINARY_API_KEY: z.string().optional(),
+  CLOUDINARY_API_SECRET: z.string().optional(),
+
+  RESEND_API_KEY: z.string().optional(),
+  EMAIL_FROM: z.string().email().optional(),
+
+  SMTP_USER: z.string().optional(),
+  SMTP_PASSWORD: z.string().optional(),
+
+  REDIS_URL: z.string().optional(),
+
+  STRIPE_PRODUCT_ID: z.string().optional(),
+  STRIPE_SECRET_KEY: z.string().optional(),
+  STRIPE_WEBHOOK_SECRET: z.string().optional(),
+
+  BKASH_BASE_URL: z.string().optional(),
+  BKASH_USERNAME: z.string().optional(),
+  BKASH_PASSWORD: z.string().optional(),
+  BKASH_APP_KEY: z.string().optional(),
+  BKASH_APP_SECRET: z.string().optional(),
+  BKASH_CALLBACK_URL: z.string().url().optional().or(z.literal("")),
+
+  SSLCOMMERZ_STORE_ID: z.string().optional(),
+  SSLCOMMERZ_STORE_PASSWORD: z.string().optional(),
+  SSLCOMMERZ_IS_LIVE: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+
+  SUPER_ADMIN_NAME: z.string().optional(),
+  SUPER_ADMIN_EMAIL: z.string().email(),
+  SUPER_ADMIN_PASSWORD: z.string().min(8),
+
+  HCAPTCHA_SECRET_KEY: z.string().optional(),
+  INTERNAL_API_SECRET: z.string().min(32).optional(),
+
+  N8N_WEBHOOK_URL: z.string().url().optional(),
+  N8N_WEBHOOK_SECRET: z.string().min(32).optional(),
+  N8N_API_KEY: z.string().min(32).optional(),
+
+  AUTOMATION_LOCAL_DISPATCHER: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+});
+
+const parsed = envSchema.safeParse(process.env);
+
+if (!parsed.success) {
+  console.error("Invalid or missing environment variables:");
+  console.error(parsed.error.flatten().fieldErrors);
+  process.exit(1);
+}
+
+const env = parsed.data;
+
+const config = {
+  app: {
+    env: env.NODE_ENV,
+    port: env.PORT,
+    clientUrl: env.CLIENT_URL,
+  },
+
+  database: {
+    url: env.DATABASE_URL,
+  },
+
+  betterAuth: {
+    secret: env.BETTER_AUTH_SECRET,
+    url: env.BETTER_AUTH_URL,
+  },
+
+  oauth: {
+    google: {
+      clientId: env.GOOGLE_CLIENT_ID,
+      clientSecret: env.GOOGLE_CLIENT_SECRET,
+    },
+    github: {
+      clientId: env.GITHUB_CLIENT_ID,
+      clientSecret: env.GITHUB_CLIENT_SECRET,
+    },
+  },
+
+  cloudinary: {
+    cloudName: env.CLOUDINARY_CLOUD_NAME,
+    apiKey: env.CLOUDINARY_API_KEY,
+    apiSecret: env.CLOUDINARY_API_SECRET,
+  },
+
+  email: {
+    resendApiKey: env.RESEND_API_KEY,
+    from: env.EMAIL_FROM ?? "onboarding@resend.dev",
+    smtpUser: env.SMTP_USER,
+    smtpPassword: env.SMTP_PASSWORD,
+  },
+
+  redis: {
+    url: env.REDIS_URL,
+  },
+
+  stripe: {
+    productId: env.STRIPE_PRODUCT_ID,
+    secretKey: env.STRIPE_SECRET_KEY,
+    webhookSecret: env.STRIPE_WEBHOOK_SECRET,
+  },
+
+  bkash: {
+    baseUrl: env.BKASH_BASE_URL,
+    username: env.BKASH_USERNAME,
+    password: env.BKASH_PASSWORD,
+    appKey: env.BKASH_APP_KEY,
+    appSecret: env.BKASH_APP_SECRET,
+    callbackUrl: env.BKASH_CALLBACK_URL,
+  },
+
+  sslcommerz: {
+    storeId: env.SSLCOMMERZ_STORE_ID,
+    storePassword: env.SSLCOMMERZ_STORE_PASSWORD,
+    isLive: env.SSLCOMMERZ_IS_LIVE,
+  },
+
+  superAdmin: {
+    email: env.SUPER_ADMIN_EMAIL,
+    password: env.SUPER_ADMIN_PASSWORD,
+    name: env.SUPER_ADMIN_NAME ?? "Super Admin",
+  },
+
+  hcaptcha: {
+    secretKey: env.HCAPTCHA_SECRET_KEY,
+  },
+
+  internalApi: {
+    secret: env.INTERNAL_API_SECRET,
+  },
+
+  n8n: {
+    webhookUrl: env.N8N_WEBHOOK_URL,
+    webhookSecret: env.N8N_WEBHOOK_SECRET,
+    apiKey: env.N8N_API_KEY,
+    localDispatcher: env.AUTOMATION_LOCAL_DISPATCHER,
+  },
+} as const;
+
+export default config;
+
+===== src/app/modules/automation/automation.const.ts =====
+export const AUTOMATION_DISPATCH = {
+	BATCH_SIZE: 10,
+	REQUEST_TIMEOUT_MS: 8_000,
+	LOCK_TIMEOUT_MS: 5 * 60 * 1000,
+	BASE_RETRY_DELAY_SECONDS: 30,
+	MAX_RETRY_DELAY_SECONDS: 3_600,
+	LOCAL_INTERVAL_MS: 5_000,
+} as const;
+
+export const AUTOMATION_EVENT_TYPES = {
+	SYSTEM_TEST: "system.test",
+	ATTEMPT_SUBMITTED: "attempt.submitted",
+	ATTEMPT_AUTO_SUBMITTED: "attempt.auto_submitted",
+	INVITATION_CREATED: "invitation.created",
+	SUBMISSION_NEEDS_AI_EVALUATION: "submission.needs_ai_evaluation",
+	EVALUATION_REVIEW_NEEDED: "evaluation.review_needed",
+} as const;
+
+===== src/app/modules/automation/automation.routes.ts =====
+import { Router } from "express";
+
+import { requireAutomationApiKey } from "../../middlewares/requireAutomationApiKey";
+import { validateRequest } from "../../middlewares/validateRequest";
+
+import { automationController } from "./automation.controller";
+import { automationValidation } from "./automation.validation";
+
+const router = Router();
+
+router.use(requireAutomationApiKey);
+
+router.post("/dispatch", automationController.dispatch);
+router.post("/maintenance", automationController.runMaintenance);
+
+router.get("/submissions/:id/ai-input", automationController.getAiInput);
+router.post(
+	"/submissions/:id/ai-result",
+	validateRequest(automationValidation.aiResultSchema),
+	automationController.saveAiResult,
+);
+
+export const automationRoutes = router;
+
+===== src/app/modules/automation/automation.controller.ts =====
+import type { Request, Response } from "express";
+import { StatusCodes } from "http-status-codes";
+
+import { catchAsync } from "../../utils/catchAsync";
+import { sendResponse } from "../../utils/sendResponse";
+
+import { automationAi } from "./automation.ai";
+import { automationMaintenance } from "./automation.maintenance";
+import { automationService } from "./automation.service";
+
+const dispatch = catchAsync(async (_req: Request, res: Response) => {
+	const result = await automationService.dispatchPendingEvents();
+
+	sendResponse(res, {
+		success: true,
+		statusCode: StatusCodes.OK,
+		message: "Automation events dispatched.",
+		data: result,
+	});
+});
+
+const runMaintenance = catchAsync(async (_req: Request, res: Response) => {
+	const result = await automationMaintenance.runMaintenance();
+
+	sendResponse(res, {
+		success: true,
+		statusCode: StatusCodes.OK,
+		message: "Maintenance run completed.",
+		data: result,
+	});
+});
+
+const getAiInput = catchAsync(async (req: Request, res: Response) => {
+	const result = await automationAi.getAiInput(req.params.id as string);
+
+	sendResponse(res, {
+		success: true,
+		statusCode: StatusCodes.OK,
+		message: "AI input retrieved.",
+		data: result,
+	});
+});
+
+const saveAiResult = catchAsync(async (req: Request, res: Response) => {
+	const result = await automationAi.saveAiResult(
+		req.params.id as string,
+		req.body,
+	);
+
+	sendResponse(res, {
+		success: true,
+		statusCode: StatusCodes.OK,
+		message: "AI result saved.",
+		data: result,
+	});
+});
+
+export const automationController = {
+	dispatch,
+	runMaintenance,
+	getAiInput,
+	saveAiResult,
+};
+
+===== src/app/modules/automation/automation.maintenance.ts =====
+import { prisma } from "../../../lib/prisma";
+import { escapeHtml } from "../../utils/escapeHtml";
+import { sendEmail } from "../../utils/sendEmail";
+import { attemptService } from "../attempt/attempt.service";
+
+const HOUR_MS = 60 * 60 * 1000;
+const REMINDER_WINDOW_MS = 24 * HOUR_MS;
+const BATCH_SIZE = 50;
+
+const reminderEmailTemplate = (assessmentTitle: string, expiresAt: Date) => `
+	<div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; color: #111;">
+		<h2>Your invitation expires soon</h2>
+		<p>Your invitation to <strong>${escapeHtml(assessmentTitle)}</strong> expires within 24 hours.</p>
+		<p>Log in to your account and accept the invitation to start the assessment.</p>
+		<p style="font-size: 13px; color: #666;">Expires at: ${expiresAt.toUTCString()}</p>
+	</div>
+`;
+
+/**
+ * Finalizes attempts whose time ran out but nobody submitted or opened.
+ * getAttemptById already auto-submits an expired IN_PROGRESS attempt, so
+ * this reuses that single code path instead of grading separately.
+ */
+const expireStaleAttempts = async () => {
+	const stale = await prisma.assessmentAttempt.findMany({
+		where: { status: "IN_PROGRESS", expiresAt: { lt: new Date() } },
+		select: { id: true, candidateId: true },
+		orderBy: { expiresAt: "asc" },
+		take: BATCH_SIZE,
+	});
+
+	let finalized = 0;
+	let failed = 0;
+
+	for (const attempt of stale) {
+		try {
+			await attemptService.getAttemptById(attempt.id, {
+				id: attempt.candidateId,
+				role: "CANDIDATE",
+			});
+			finalized += 1;
+		} catch (error) {
+			failed += 1;
+			console.error("[Maintenance] Failed to finalize attempt", attempt.id, error);
+		}
+	}
+
+	return { found: stale.length, finalized, failed };
+};
+
+/** PENDING invitations past their expiry become EXPIRED. */
+const expireInvitations = async () => {
+	const result = await prisma.assessmentInvitation.updateMany({
+		where: { status: "PENDING", expiresAt: { lt: new Date() } },
+		data: { status: "EXPIRED" },
+	});
+
+	return { expired: result.count };
+};
+
+/**
+ * Sends one reminder per invitation, 24 hours before it expires.
+ * reminderSentAt is claimed BEFORE sending, so two overlapping runs can
+ * never email the same candidate twice. If sending fails, the claim is
+ * released so the next run retries.
+ */
+const sendInvitationReminders = async () => {
+	const now = new Date();
+
+	const due = await prisma.assessmentInvitation.findMany({
+		where: {
+			status: "PENDING",
+			reminderSentAt: null,
+			expiresAt: {
+				gt: now,
+				lte: new Date(now.getTime() + REMINDER_WINDOW_MS),
+			},
+			assessment: { deletedAt: null, status: { in: ["PUBLISHED", "ACTIVE"] } },
+		},
+		select: {
+			id: true,
+			email: true,
+			candidateId: true,
+			assessmentId: true,
+			expiresAt: true,
+			assessment: { select: { title: true } },
+		},
+		orderBy: { expiresAt: "asc" },
+		take: BATCH_SIZE,
+	});
+
+	let sent = 0;
+	let failed = 0;
+
+	for (const invitation of due) {
+		if (!invitation.expiresAt) continue;
+
+		const claimed = await prisma.assessmentInvitation.updateMany({
+			where: { id: invitation.id, reminderSentAt: null },
+			data: { reminderSentAt: now },
+		});
+
+		if (claimed.count === 0) continue; // another run already took it
+
+		try {
+			await sendEmail({
+				to: invitation.email,
+				subject: `Reminder: ${invitation.assessment.title} expires soon`,
+				html: reminderEmailTemplate(
+					invitation.assessment.title,
+					invitation.expiresAt,
+				),
+			});
+
+			if (invitation.candidateId) {
+				try {
+					await prisma.notification.create({
+						data: {
+							userId: invitation.candidateId,
+							title: "Invitation expires soon",
+							message: `Your invitation to "${invitation.assessment.title}" expires within 24 hours.`,
+							type: "ASSESSMENT_REMINDER" as const,
+							metadata: {
+								assessmentId: invitation.assessmentId,
+								invitationId: invitation.id,
+							},
+						},
+					});
+				} catch (error) {
+					console.error("[Maintenance] Failed to create reminder notification", error);
+				}
+			}
+
+			sent += 1;
+		} catch (error) {
+			failed += 1;
+			console.error("[Maintenance] Reminder failed", invitation.id, error);
+
+			await prisma.assessmentInvitation.updateMany({
+				where: { id: invitation.id },
+				data: { reminderSentAt: null },
+			});
+		}
+	}
+
+	return { found: due.length, sent, failed };
+};
+
+const runMaintenance = async () => {
+	// Order matters: expire first, so an expired invitation never gets a reminder.
+	const attempts = await expireStaleAttempts();
+	const invitations = await expireInvitations();
+	const reminders = await sendInvitationReminders();
+
+	return { attempts, invitations, reminders };
+};
+
+export const automationMaintenance = {
+	expireStaleAttempts,
+	expireInvitations,
+	sendInvitationReminders,
+	runMaintenance,
+};
+
+===== src/app/modules/automation/automation.ai.ts =====
+import { StatusCodes } from "http-status-codes";
+
+import { prisma } from "../../../lib/prisma";
+import AppError from "../../errors/appError";
+
+import { AUTOMATION_EVENT_TYPES } from "./automation.const";
+import { automationService } from "./automation.service";
+
+type AiResultInput = {
+	aiScore: number;
+	aiFeedback: string;
+	aiModel: string;
+};
+
+const loadWrittenSubmission = async (submissionId: string) => {
+	const submission = await prisma.submission.findUnique({
+		where: { id: submissionId },
+		select: {
+			id: true,
+			attemptId: true,
+			problemId: true,
+			answerText: true,
+			evaluation: {
+				select: { id: true, status: true, maxScore: true, reviewStatus: true },
+			},
+			problem: {
+				select: { title: true, description: true, type: true, rubric: true },
+			},
+			attempt: {
+				select: {
+					candidateId: true,
+					assessmentId: true,
+					assessment: { select: { companyId: true } },
+				},
+			},
+		},
+	});
+
+	if (!submission) {
+		throw new AppError(StatusCodes.NOT_FOUND, "Submission not found.");
+	}
+
+	if (submission.problem.type !== "WRITTEN") {
+		throw new AppError(
+			StatusCodes.BAD_REQUEST,
+			"AI evaluation is only available for WRITTEN problems.",
+		);
+	}
+
+	return submission;
+};
+
+/**
+ * What n8n needs to grade one written answer. No name, email or phone is
+ * ever returned. If the candidate has not granted AI_PROCESSING consent
+ * (or the submission is already graded), eligible is false and n8n must
+ * stop: the submission simply stays PENDING for the recruiter.
+ */
+const getAiInput = async (submissionId: string) => {
+	const submission = await loadWrittenSubmission(submissionId);
+
+	if (!submission.evaluation || submission.evaluation.status !== "PENDING") {
+		return { eligible: false as const, reason: "ALREADY_GRADED_OR_NOT_PENDING" };
+	}
+
+	if (
+		submission.evaluation.reviewStatus === "APPROVED" ||
+		submission.evaluation.reviewStatus === "OVERRIDDEN"
+	) {
+		return { eligible: false as const, reason: "ALREADY_REVIEWED" };
+	}
+
+	if (!submission.answerText || submission.answerText.trim() === "") {
+		return { eligible: false as const, reason: "EMPTY_ANSWER" };
+	}
+
+	const consent = await prisma.userConsent.findUnique({
+		where: {
+			userId_consentType: {
+				userId: submission.attempt.candidateId,
+				consentType: "AI_PROCESSING",
+			},
+		},
+		select: { granted: true },
+	});
+
+	if (!consent?.granted) {
+		return { eligible: false as const, reason: "NO_AI_CONSENT" };
+	}
+
+	return {
+		eligible: true as const,
+		submissionId: submission.id,
+		question: {
+			title: submission.problem.title,
+			description: submission.problem.description,
+		},
+		rubric: submission.problem.rubric ?? null,
+		answer: submission.answerText,
+		maxScore: submission.evaluation.maxScore,
+	};
+};
+
+/**
+ * Stores the AI suggestion. It never touches score or status, so the
+ * submission stays PENDING and only a recruiter can finalize it.
+ */
+const saveAiResult = async (submissionId: string, input: AiResultInput) => {
+	const submission = await loadWrittenSubmission(submissionId);
+
+	if (!submission.evaluation) {
+		throw new AppError(StatusCodes.CONFLICT, "Submission has no evaluation yet.");
+	}
+
+	if (
+		submission.evaluation.status !== "PENDING" ||
+		submission.evaluation.reviewStatus === "APPROVED" ||
+		submission.evaluation.reviewStatus === "OVERRIDDEN"
+	) {
+		throw new AppError(
+			StatusCodes.CONFLICT,
+			"This submission was already graded by a recruiter.",
+		);
+	}
+
+	if (input.aiScore > submission.evaluation.maxScore) {
+		throw new AppError(
+			StatusCodes.BAD_REQUEST,
+			`aiScore cannot exceed the maximum marks (${submission.evaluation.maxScore}).`,
+		);
+	}
+
+	await prisma.submissionEvaluation.update({
+		where: { id: submission.evaluation.id },
+		data: {
+			aiScore: input.aiScore,
+			aiFeedback: input.aiFeedback,
+			aiModel: input.aiModel,
+			aiEvaluatedAt: new Date(),
+			reviewStatus: "PENDING_REVIEW",
+		},
+	});
+
+	const companyId = submission.attempt.assessment.companyId;
+
+	// Best-effort: the AI result is saved even if these two fail.
+	try {
+		const company = await prisma.company.findUnique({
+			where: { id: companyId },
+			select: { ownerId: true },
+		});
+
+		if (company) {
+			await prisma.notification.create({
+				data: {
+					userId: company.ownerId,
+					title: "AI suggestion ready for review",
+					message: "A written answer has an AI-suggested score waiting for your review.",
+					type: "EVALUATION_REVIEW_NEEDED",
+					metadata: {
+						submissionId,
+						attemptId: submission.attemptId,
+						assessmentId: submission.attempt.assessmentId,
+					},
+				},
+			});
+		}
+	} catch (error) {
+		console.error("[AI] Failed to create review notification", error);
+	}
+
+	try {
+		await automationService.emitEvent({
+			eventType: AUTOMATION_EVENT_TYPES.EVALUATION_REVIEW_NEEDED,
+			aggregateType: "Submission",
+			aggregateId: submissionId,
+			dedupeKey: `${AUTOMATION_EVENT_TYPES.EVALUATION_REVIEW_NEEDED}:${submissionId}`,
+			payload: {
+				submissionId,
+				attemptId: submission.attemptId,
+				assessmentId: submission.attempt.assessmentId,
+			},
+		});
+	} catch (error) {
+		console.error("[AI] Failed to emit review event", error);
+	}
+
+	return { saved: true, reviewStatus: "PENDING_REVIEW" as const };
+};
+
+export const automationAi = {
+	getAiInput,
+	saveAiResult,
+};
+
+===== src/app/modules/automation/automation.validation.ts =====
+import { z } from "zod";
+
+const aiResultSchema = z.object({
+	aiScore: z.coerce.number().int().min(0, "Score cannot be negative."),
+	aiFeedback: z.string().trim().min(1).max(2000),
+	aiModel: z.string().trim().min(1).max(100),
+});
+
+export const automationValidation = {
+	aiResultSchema,
+};
+
+===== src/app/modules/attempt/attempt.const.ts =====
+/**
+ * Shown to a CANDIDATE while taking an attempt. Deliberately hides:
+ * - McqOption.isCorrect (would let them see the answer)
+ * - McqProblem.explanation (reveals reasoning behind the correct answer)
+ * - Non-sample TestCases entirely, and never exposes hidden expectedOutput
+ * Recruiters/admins use PROBLEM_DETAIL_SELECT (problem.const.ts) instead,
+ * which has none of these restrictions.
+ */
+export const ATTEMPT_PROBLEM_SELECT = {
+  id: true,
+  title: true,
+  description: true,
+  type: true,
+  difficulty: true,
+  defaultMarks: true,
+  timeLimitSeconds: true,
+  mcqProblem: {
+    select: {
+      id: true,
+      type: true,
+      options: {
+        select: { id: true, optionText: true, order: true },
+        orderBy: { order: "asc" },
+      },
+    },
+  },
+  testCases: {
+    where: { isSample: true },
+    select: { id: true, input: true, expectedOutput: true, isSample: true },
+    orderBy: { id: "asc" },
+  },
+} as const;
+
+export const ATTEMPT_DETAIL_SELECT = {
+  id: true,
+  assessmentId: true,
+  candidateId: true,
+  candidate: { select: { id: true, name: true, email: true } },
+  attemptNumber: true,
+  status: true,
+  startedAt: true,
+  submittedAt: true,
+  expiresAt: true,
+  autoSubmittedAt: true,
+  tabSwitchCount: true,
+  createdAt: true,
+  assessment: {
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      instructions: true,
+      companyId: true,
+      durationMinutes: true,
+      totalMarks: true,
+      passingMarks: true,
+      shuffleQuestions: true,
+      allowReview: true,
+      showResultImmediately: true,
+      assessmentProblems: {
+        select: {
+          id: true,
+          order: true,
+          marks: true,
+          problem: { select: ATTEMPT_PROBLEM_SELECT },
+        },
+        orderBy: { order: "asc" },
+      },
+    },
+  },
+  submissions: {
+    select: {
+      id: true,
+      problemId: true,
+      answerText: true,
+      code: true,
+      language: true,
+      status: true,
+      submittedAt: true,
+      answers: { select: { optionId: true } },
+    },
+  },
+} as const;
+
+/**
+ * Recruiter/Admin grading view of a single submission — includes the
+ * candidate's raw answer, existing evaluation, and (for CODING) per-test-
+ * case results to grade against.
+ */
+export const SUBMISSION_GRADING_SELECT = {
+  id: true,
+  attemptId: true,
+  problemId: true,
+  answerText: true,
+  code: true,
+  language: true,
+  status: true,
+  submittedAt: true,
+  attempt: {
+    select: {
+      id: true,
+      assessmentId: true,
+      attemptNumber: true,
+      candidate: { select: { id: true, name: true, email: true } },
+    },
+  },
+  problem: {
+    select: {
+      id: true,
+      title: true,
+      type: true,
+      defaultMarks: true,
+      testCases: {
+        select: {
+          id: true,
+          input: true,
+          expectedOutput: true,
+          isSample: true,
+          points: true,
+        },
+      },
+    },
+  },
+  answers: {
+    select: {
+      optionId: true,
+      option: { select: { id: true, optionText: true, isCorrect: true } },
+    },
+  },
+  testCaseResults: {
+    select: {
+      id: true,
+      testCaseId: true,
+      passed: true,
+      actualOutput: true,
+      points: true,
+    },
+  },
+  evaluation: {
+    select: {
+      id: true,
+      score: true,
+      maxScore: true,
+      status: true,
+      isAutoEvaluated: true,
+      feedback: true,
+      aiScore: true,
+      aiFeedback: true,
+      aiModel: true,
+      aiEvaluatedAt: true,
+      reviewStatus: true,
+      reviewedAt: true,
+      evaluatedAt: true,
+      evaluatorId: true,
+    },
+  },
+} as const;
+
+export const RESULT_SELECT = {
+  id: true,
+  attemptId: true,
+  assessmentId: true,
+  totalScore: true,
+  totalMarks: true,
+  percentage: true,
+  status: true,
+  rank: true,
+  evaluatedAt: true,
+  createdAt: true,
+} as const;
+
+
+===== src/app/modules/evaluation/evaluation.service.ts =====
+import { StatusCodes } from "http-status-codes";
+
+import type { UserRole } from "../../../generated/prisma/enums";
+
+import { prisma } from "../../../lib/prisma";
+import { withTenantScope } from "../../../lib/prismaTenantScope";
+import AppError from "../../errors/appError";
+import { SUBMISSION_GRADING_SELECT } from "../attempt/attempt.const";
+import type { ManualEvaluationInput } from "../attempt/attempt.interface";
+import { recomputeResult } from "../attempt/grading.util";
+
+type Requester = { id: string; role: UserRole; companyId?: string };
+
+const assertCanGrade = (
+	requesterCompanyId: string | undefined,
+	submissionCompanyId: string,
+	role: UserRole,
+) => {
+	if (role !== "ADMIN" && requesterCompanyId !== submissionCompanyId) {
+		// tenant-scoped via relation check (404 Not Found for IDOR protection)
+		throw new AppError(StatusCodes.NOT_FOUND, "Submission not found.");
+	}
+};
+
+const getSubmissionsForAttempt = async (
+	attemptId: string,
+	requester: Requester,
+) => {
+	const attempt = await prisma.assessmentAttempt.findUnique({
+		where: { id: attemptId },
+		select: { id: true, assessment: { select: { companyId: true } } },
+	});
+
+	if (!attempt) {
+		throw new AppError(StatusCodes.NOT_FOUND, "Attempt not found.");
+	}
+
+	assertCanGrade(
+		requester.companyId,
+		attempt.assessment.companyId,
+		requester.role,
+	);
+
+	return prisma.submission.findMany({
+		where: { attemptId },
+		select: SUBMISSION_GRADING_SELECT,
+		orderBy: { createdAt: "asc" },
+	});
+};
+
+const getSubmissionById = async (id: string, requester: Requester) => {
+	const submission = await prisma.submission.findUnique({
+		where: { id },
+		select: SUBMISSION_GRADING_SELECT,
+	});
+
+	if (!submission) {
+		throw new AppError(StatusCodes.NOT_FOUND, "Submission not found.");
+	}
+
+	const attempt = await prisma.assessmentAttempt.findUniqueOrThrow({
+		where: { id: submission.attemptId },
+		select: { assessment: { select: { companyId: true } } },
+	});
+
+	assertCanGrade(
+		requester.companyId,
+		attempt.assessment.companyId,
+		requester.role,
+	);
+
+	return submission;
+};
+
+/**
+ * Grading queue for an assessment - every submission still waiting on a
+ * human (CODING/WRITTEN with a real answer), across all candidates.
+ */
+const getPendingEvaluations = async (
+	assessmentId: string,
+	companyId: string,
+) => {
+	// tenant-scoped via withTenantScope
+	const assessment = await prisma.assessment.findFirst({
+		where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId),
+	});
+
+	if (!assessment) {
+		throw new AppError(StatusCodes.NOT_FOUND, "Assessment not found.");
+	}
+
+	return prisma.submission.findMany({
+		where: { attempt: { assessmentId }, evaluation: { status: "PENDING" } },
+		select: SUBMISSION_GRADING_SELECT,
+		orderBy: { submittedAt: "asc" },
+	});
+};
+
+/**
+ * Manually grades a CODING or WRITTEN submission. MCQ submissions are
+ * rejected outright - they're graded automatically the moment the attempt
+ * is finalized (see grading.util.ts) and re-grading them manually would
+ * let a recruiter silently override an objectively-checkable answer.
+ *
+ * If an AI suggestion was waiting for review, grading it here marks it
+ * APPROVED (same score as the AI) or OVERRIDDEN (different score).
+ *
+ * Triggers recomputeResult() afterward, which is what actually moves the
+ * attempt's Result out of PENDING once every submission is COMPLETED.
+ */
+const evaluateSubmission = async (
+	id: string,
+	evaluatorId: string,
+	companyId: string,
+	payload: ManualEvaluationInput,
+) => {
+	const submission = await prisma.submission.findUnique({
+		where: { id },
+		include: {
+			problem: { select: { id: true, type: true, defaultMarks: true } },
+			evaluation: { select: { reviewStatus: true, aiScore: true } },
+			attempt: {
+				select: {
+					id: true,
+					status: true,
+					assessment: {
+						select: {
+							companyId: true,
+							assessmentProblems: { select: { problemId: true, marks: true } },
+						},
+					},
+				},
+			},
+		},
+	});
+
+	if (!submission) {
+		throw new AppError(StatusCodes.NOT_FOUND, "Submission not found.");
+	}
+
+	assertCanGrade(
+		companyId,
+		submission.attempt.assessment.companyId,
+		"RECRUITER",
+	);
+
+	if (
+		submission.attempt.status === "NOT_STARTED" ||
+		submission.attempt.status === "IN_PROGRESS"
+	) {
+		throw new AppError(
+			StatusCodes.CONFLICT,
+			"This attempt hasn't been submitted yet.",
+		);
+	}
+
+	if (submission.problem.type === "MCQ") {
+		throw new AppError(
+			StatusCodes.BAD_REQUEST,
+			"MCQ submissions are graded automatically and cannot be manually re-graded.",
+		);
+	}
+
+	const assessmentProblem =
+		submission.attempt.assessment.assessmentProblems.find(
+			(ap) => ap.problemId === submission.problemId,
+		);
+	const maxScore = assessmentProblem?.marks ?? submission.problem.defaultMarks;
+
+	if (payload.score > maxScore) {
+		throw new AppError(
+			StatusCodes.BAD_REQUEST,
+			`Score cannot exceed the maximum marks for this problem (${maxScore}).`,
+		);
+	}
+
+	const reviewStatus =
+		submission.evaluation?.reviewStatus === "PENDING_REVIEW"
+			? submission.evaluation.aiScore === payload.score
+				? ("APPROVED" as const)
+				: ("OVERRIDDEN" as const)
+			: undefined;
+
+	await prisma.$transaction(async (tx) => {
+		if (submission.problem.type === "CODING" && payload.testCaseResults) {
+			for (const testCaseResult of payload.testCaseResults) {
+				await tx.testCaseResult.upsert({
+					where: {
+						submissionId_testCaseId: {
+							submissionId: id,
+							testCaseId: testCaseResult.testCaseId,
+						},
+					},
+					update: {
+						passed: testCaseResult.passed,
+						...(testCaseResult.actualOutput !== undefined && {
+							actualOutput: testCaseResult.actualOutput,
+						}),
+						points: testCaseResult.points ?? 0,
+					},
+					create: {
+						submissionId: id,
+						testCaseId: testCaseResult.testCaseId,
+						passed: testCaseResult.passed,
+						...(testCaseResult.actualOutput !== undefined && {
+							actualOutput: testCaseResult.actualOutput,
+						}),
+						points: testCaseResult.points ?? 0,
+					},
+				});
+			}
+		}
+
+		await tx.submission.update({
+			where: { id },
+			data: { status: "EVALUATED" },
+		});
+
+		await tx.submissionEvaluation.upsert({
+			where: { submissionId: id },
+			update: {
+				score: payload.score,
+				maxScore,
+				status: "COMPLETED",
+				isAutoEvaluated: false,
+				evaluatorId,
+				...(payload.feedback !== undefined && { feedback: payload.feedback }),
+				...(reviewStatus && { reviewStatus, reviewedAt: new Date() }),
+				evaluatedAt: new Date(),
+			},
+			create: {
+				submissionId: id,
+				score: payload.score,
+				maxScore,
+				status: "COMPLETED",
+				isAutoEvaluated: false,
+				evaluatorId,
+				...(payload.feedback !== undefined && { feedback: payload.feedback }),
+				evaluatedAt: new Date(),
+			},
+		});
+	});
+
+	await recomputeResult(submission.attempt.id);
+
+	return prisma.submission.findUniqueOrThrow({
+		where: { id },
+		select: SUBMISSION_GRADING_SELECT,
+	});
+};
+
+/**
+ * Accepts the AI-suggested score and feedback as the final grade. Only a
+ * recruiter can do this, so the human stays the final decision maker.
+ */
+const approveAiSuggestion = async (
+	id: string,
+	evaluatorId: string,
+	companyId: string,
+) => {
+	const submission = await prisma.submission.findUnique({
+		where: { id },
+		include: {
+			evaluation: true,
+			attempt: {
+				select: {
+					id: true,
+					status: true,
+					assessment: { select: { companyId: true } },
+				},
+			},
+		},
+	});
+
+	if (!submission) {
+		throw new AppError(StatusCodes.NOT_FOUND, "Submission not found.");
+	}
+
+	assertCanGrade(
+		companyId,
+		submission.attempt.assessment.companyId,
+		"RECRUITER",
+	);
+
+	const evaluation = submission.evaluation;
+
+	if (
+		!evaluation ||
+		evaluation.reviewStatus !== "PENDING_REVIEW" ||
+		evaluation.aiScore === null
+	) {
+		throw new AppError(
+			StatusCodes.CONFLICT,
+			"There is no AI suggestion waiting for review on this submission.",
+		);
+	}
+
+	if (evaluation.status === "COMPLETED") {
+		throw new AppError(
+			StatusCodes.CONFLICT,
+			"This submission has already been graded.",
+		);
+	}
+
+	const aiScore = evaluation.aiScore;
+	const aiFeedback = evaluation.aiFeedback;
+
+	await prisma.$transaction([
+		prisma.submission.update({
+			where: { id },
+			data: { status: "EVALUATED" },
+		}),
+		prisma.submissionEvaluation.update({
+			where: { submissionId: id },
+			data: {
+				score: aiScore,
+				...(aiFeedback !== null && { feedback: aiFeedback }),
+				status: "COMPLETED",
+				isAutoEvaluated: false,
+				evaluatorId,
+				reviewStatus: "APPROVED",
+				reviewedAt: new Date(),
+				evaluatedAt: new Date(),
+			},
+		}),
+	]);
+
+	await recomputeResult(submission.attempt.id);
+
+	return prisma.submission.findUniqueOrThrow({
+		where: { id },
+		select: SUBMISSION_GRADING_SELECT,
+	});
+};
+
+export const evaluationService = {
+	getSubmissionsForAttempt,
+	getSubmissionById,
+	getPendingEvaluations,
+	evaluateSubmission,
+	approveAiSuggestion,
+};
+
+===== src/app/modules/evaluation/evaluation.routes.ts =====
+import { Router } from "express";
+
+import { requireAuth, requireRole } from "../../middlewares/requireAuth";
+import { validateRequest } from "../../middlewares/validateRequest";
+
+import { evaluationController } from "./evaluation.controller";
+import { evaluationValidation } from "./evaluation.validation";
+
+const router = Router();
+
+router.use(requireAuth, requireRole("RECRUITER", "ADMIN"));
+
+router.get(
+	"/attempts/:attemptId/submissions",
+	evaluationController.getSubmissionsForAttempt,
+);
+
+router.get(
+	"/assessments/:assessmentId/pending",
+	evaluationController.getPendingEvaluations,
+);
+
+router.get("/submissions/:id", evaluationController.getSubmissionById);
+
+router.patch(
+	"/submissions/:id",
+	validateRequest(evaluationValidation.manualEvaluationSchema),
+	evaluationController.evaluateSubmission,
+);
+
+router.post(
+	"/submissions/:id/approve-ai",
+	evaluationController.approveAiSuggestion,
+);
+
+export const evaluationRoutes = router;
+
+===== src/app/modules/notification/notification.service.ts =====
+import { StatusCodes } from "http-status-codes";
+
+import type { Prisma } from "../../../generated/prisma/client";
+import type { NotificationWhereInput } from "../../../generated/prisma/models/Notification";
+
+import { prisma } from "../../../lib/prisma";
+import AppError from "../../errors/appError";
+import { QueryBuilder } from "../../queryBuilder";
+
+import { NOTIFICATION_SELECT } from "./notification.const";
+
+const notificationQueryBuilder = new QueryBuilder<
+	Prisma.NotificationGetPayload<{ select: typeof NOTIFICATION_SELECT }>,
+	NotificationWhereInput
+>(prisma.notification, {
+	searchableFields: ["title", "message"],
+	filterableFields: {
+		isRead: "boolean",
+		type: {
+			type: "enum",
+			enum: {
+				ASSESSMENT_INVITATION: "ASSESSMENT_INVITATION",
+				ASSESSMENT_REMINDER: "ASSESSMENT_REMINDER",
+				ASSESSMENT_RESULT: "ASSESSMENT_RESULT",
+				ATTEMPT_SUBMITTED: "ATTEMPT_SUBMITTED",
+				ATTEMPT_EVALUATED: "ATTEMPT_EVALUATED",
+				PAYMENT_SUCCESS: "PAYMENT_SUCCESS",
+				PAYMENT_FAILED: "PAYMENT_FAILED",
+				SYSTEM: "SYSTEM",
+			},
+		},
+		createdAt: "date",
+	},
+	sortableFields: ["createdAt"],
+	selectableFields: Object.keys(NOTIFICATION_SELECT),
+	defaultSelect: NOTIFICATION_SELECT,
+	defaultSortField: "createdAt",
+});
+
+const getMyNotifications = async (
+	userId: string,
+	query: Record<string, unknown>,
+) => {
+	return notificationQueryBuilder.execute(query, { userId });
+};
+
+const getUnreadCount = async (userId: string) => {
+	const unreadCount = await prisma.notification.count({
+		where: { userId, isRead: false },
+	});
+	return { unreadCount };
+};
+
+const markAsRead = async (id: string, userId: string) => {
+	const notification = await prisma.notification.findFirst({
+		where: { id, userId },
+	});
+
+	if (!notification) {
+		throw new AppError(StatusCodes.NOT_FOUND, "Notification not found.");
+	}
+
+	return prisma.notification.update({
+		where: { id },
+		data: { isRead: true },
+		select: NOTIFICATION_SELECT,
+	});
+};
+
+const markAllAsRead = async (userId: string) => {
+	const result = await prisma.notification.updateMany({
+		where: { userId, isRead: false },
+		data: { isRead: true },
+	});
+	return { updated: result.count };
+};
+
+const deleteNotification = async (id: string, userId: string) => {
+	const notification = await prisma.notification.findFirst({
+		where: { id, userId },
+	});
+
+	if (!notification) {
+		throw new AppError(StatusCodes.NOT_FOUND, "Notification not found.");
+	}
+
+	await prisma.notification.delete({ where: { id } });
+
+	return { message: "Notification deleted successfully." };
+};
+
+export const notificationService = {
+	getMyNotifications,
+	getUnreadCount,
+	markAsRead,
+	markAllAsRead,
+	deleteNotification,
+};
+
+
+===== src/app/modules/problem/problem.validation.ts =====
+import { z } from "zod";
+
+const mcqOptionSchema = z.object({
+	optionText: z.string().trim().min(1, "Option text is required.").max(500),
+	isCorrect: z.boolean(),
+	order: z.number().int().min(1, "Option order must start at 1."),
+});
+
+const testCaseSchema = z.object({
+	input: z.string().max(5000).optional(),
+	expectedOutput: z
+		.string()
+		.trim()
+		.min(1, "Expected output is required.")
+		.max(5000),
+	isSample: z.boolean().optional(),
+	points: z.coerce.number().int().min(0).max(1000).optional(),
+	timeLimitMs: z.coerce.number().int().positive().optional(),
+	memoryLimitMb: z.coerce.number().int().positive().optional(),
+});
+
+const baseFields = {
+	title: z
+		.string()
+		.trim()
+		.min(3, "Title must be at least 3 characters.")
+		.max(200),
+	description: z
+		.string()
+		.trim()
+		.min(10, "Description must be at least 10 characters.")
+		.max(10000),
+	difficulty: z.enum(["EASY", "MEDIUM", "HARD"]).optional(),
+	defaultMarks: z.coerce
+		.number()
+		.int()
+		.min(1, "Marks must be at least 1.")
+		.max(1000)
+		.optional(),
+	isPublic: z.boolean().optional(),
+};
+
+const mcqCreateSchema = z.object({
+	...baseFields,
+	type: z.literal("MCQ"),
+	mcqType: z
+		.enum(["SINGLE_CHOICE", "MULTIPLE_CHOICE"])
+		.default("SINGLE_CHOICE"),
+	explanation: z.string().trim().max(2000).optional(),
+	options: z
+		.array(mcqOptionSchema)
+		.min(2, "Provide at least 2 options.")
+		.max(10, "At most 10 options are allowed."),
+});
+
+const codingCreateSchema = z.object({
+	...baseFields,
+	type: z.literal("CODING"),
+	timeLimitSeconds: z.coerce.number().int().min(1).max(7200).optional(),
+	testCases: z.array(testCaseSchema).min(1, "Provide at least 1 test case."),
+});
+
+const writtenCreateSchema = z.object({
+	...baseFields,
+	type: z.literal("WRITTEN"),
+	rubric: z.string().trim().min(10).max(5000).optional(),
+});
+
+/**
+ * The per-type shape (options required for MCQ, testCases for CODING) is
+ * enforced by the discriminated union itself. The cross-field rules that
+ * a union alone can't express - unique option order, at least one correct
+ * option, single-choice having exactly one - are enforced in superRefine
+ * below, which runs after the union has already picked a branch.
+ */
+export const createProblemSchema = z
+	.discriminatedUnion("type", [
+		mcqCreateSchema,
+		codingCreateSchema,
+		writtenCreateSchema,
+	])
+	.superRefine((data, ctx) => {
+		if (data.type !== "MCQ") return;
+
+		const orders = data.options.map((option) => option.order);
+		if (new Set(orders).size !== orders.length) {
+			ctx.addIssue({
+				code: "custom",
+				message: "Option order values must be unique.",
+				path: ["options"],
+			});
+		}
+
+		const correctCount = data.options.filter(
+			(option) => option.isCorrect,
+		).length;
+
+		if (correctCount === 0) {
+			ctx.addIssue({
+				code: "custom",
+				message: "At least one option must be marked correct.",
+				path: ["options"],
+			});
+		}
+
+		if (data.mcqType === "SINGLE_CHOICE" && correctCount > 1) {
+			ctx.addIssue({
+				code: "custom",
+				message:
+					"SINGLE_CHOICE questions must have exactly one correct option.",
+				path: ["options"],
+			});
+		}
+	});
+
+/**
+ * `type` can't change after creation (see problem.interface.ts). Nested
+ * `options`/`testCases`, when provided, fully replace the existing set -
+ * see problem.service.ts#updateProblem for how that's done safely against
+ * the onDelete: Restrict foreign keys from SubmissionAnswer/TestCaseResult.
+ */
+export const updateProblemSchema = z
+	.object({
+		title: z.string().trim().min(3).max(200).optional(),
+		description: z.string().trim().min(10).max(10000).optional(),
+		rubric: z.string().trim().min(10).max(5000).optional(),
+		difficulty: z.enum(["EASY", "MEDIUM", "HARD"]).optional(),
+		defaultMarks: z.coerce.number().int().min(1).max(1000).optional(),
+		isPublic: z.boolean().optional(),
+		timeLimitSeconds: z.coerce.number().int().min(1).max(7200).optional(),
+		mcqType: z.enum(["SINGLE_CHOICE", "MULTIPLE_CHOICE"]).optional(),
+		explanation: z.string().trim().max(2000).optional(),
+		options: z.array(mcqOptionSchema).min(2).max(10).optional(),
+		testCases: z.array(testCaseSchema).min(1).optional(),
+	})
+	.superRefine((data, ctx) => {
+		if (!data.options) return;
+
+		const orders = data.options.map((option) => option.order);
+		if (new Set(orders).size !== orders.length) {
+			ctx.addIssue({
+				code: "custom",
+				message: "Option order values must be unique.",
+				path: ["options"],
+			});
+		}
+
+		if (!data.options.some((option) => option.isCorrect)) {
+			ctx.addIssue({
+				code: "custom",
+				message: "At least one option must be marked correct.",
+				path: ["options"],
+			});
+		}
+	});
+
+export const problemValidation = {
+	createProblemSchema,
+	updateProblemSchema,
+};
+
+===== src/app/modules/problem/problem.service.ts =====
+import { StatusCodes } from "http-status-codes";
+
+import type { Prisma } from "../../../generated/prisma/client";
+import type { ProblemWhereInput } from "../../../generated/prisma/models/Problem";
+
+import { prisma } from "../../../lib/prisma";
+import { withTenantScope } from "../../../lib/prismaTenantScope";
+import AppError from "../../errors/appError";
+import { QueryBuilder } from "../../queryBuilder";
+import { generateUniqueSlug } from "../../utils/generateUniqueSlug";
+
+import { PROBLEM_DETAIL_SELECT, PROBLEM_LIST_SELECT } from "./problem.const";
+import type {
+    CreateProblemInput,
+    UpdateProblemInput,
+} from "./problem.interface";
+
+const problemQueryBuilder = new QueryBuilder<
+    Prisma.ProblemGetPayload<{ select: typeof PROBLEM_LIST_SELECT }>,
+    ProblemWhereInput
+>(prisma.problem, {
+    searchableFields: ["title", "description"],
+    filterableFields: {
+        type: {
+            type: "enum",
+            enum: { MCQ: "MCQ", CODING: "CODING", WRITTEN: "WRITTEN" },
+        },
+        difficulty: {
+            type: "enum",
+            enum: { EASY: "EASY", MEDIUM: "MEDIUM", HARD: "HARD" },
+        },
+        isPublic: "boolean",
+        createdAt: "date",
+    },
+    sortableFields: ["createdAt", "title", "defaultMarks"],
+    selectableFields: Object.keys(PROBLEM_LIST_SELECT),
+    defaultSelect: PROBLEM_LIST_SELECT,
+    softDelete: true,
+    defaultSortField: "createdAt",
+});
+
+const createProblem = async (
+    companyId: string,
+    createdById: string,
+    payload: CreateProblemInput,
+) => {
+    const slug = await generateUniqueSlug(payload.title, (candidate) =>
+        prisma.problem
+            .findUnique({
+                where: { companyId_slug: { companyId, slug: candidate } },
+            })
+            .then(Boolean),
+    );
+
+    const baseData = {
+        title: payload.title,
+        slug,
+        description: payload.description,
+        difficulty: payload.difficulty ?? "MEDIUM",
+        defaultMarks: payload.defaultMarks ?? 10,
+        isPublic: payload.isPublic ?? false,
+        companyId,
+        createdById,
+    };
+
+    if (payload.type === "MCQ") {
+        return prisma.problem.create({
+            data: {
+                ...baseData,
+                type: "MCQ",
+                mcqProblem: {
+                    create: {
+                        type: payload.mcqType ?? "SINGLE_CHOICE",
+                        ...(payload.explanation !== undefined && {
+                            explanation: payload.explanation,
+                        }),
+                        options: {
+                            create: payload.options.map((option) => ({
+                                optionText: option.optionText,
+                                isCorrect: option.isCorrect,
+                                order: option.order,
+                            })),
+                        },
+                    },
+                },
+            },
+            select: PROBLEM_DETAIL_SELECT,
+        });
+    }
+
+    if (payload.type === "CODING") {
+        return prisma.problem.create({
+            data: {
+                ...baseData,
+                type: "CODING",
+                ...(payload.timeLimitSeconds !== undefined && {
+                    timeLimitSeconds: payload.timeLimitSeconds,
+                }),
+                testCases: { create: payload.testCases },
+            },
+            select: PROBLEM_DETAIL_SELECT,
+        });
+    }
+
+    return prisma.problem.create({
+        data: {
+            ...baseData,
+            type: "WRITTEN",
+            ...(payload.rubric !== undefined && { rubric: payload.rubric }),
+        },
+        select: PROBLEM_DETAIL_SELECT,
+    });
+};
+
+/**
+ * `companyId` undefined means "don't scope" - used for ADMIN, who can
+ * browse every company's problem bank. RECRUITER always passes their own
+ * companyId.
+ */
+const getAllProblems = async (
+    query: Record<string, unknown>,
+    companyId?: string,
+) => {
+    // Pass empty object {} instead of undefined to satisfy exactOptionalPropertyTypes
+    const tenantScope = withTenantScope({}, companyId) as ProblemWhereInput;
+    return problemQueryBuilder.execute(query, tenantScope);
+};
+
+const getProblemById = async (id: string, companyId?: string) => {
+    // tenant-scoped via withTenantScope
+    const whereClause = withTenantScope({ id, deletedAt: null }, companyId) as ProblemWhereInput;
+
+    const problem = await prisma.problem.findFirst({
+        where: whereClause,
+        select: PROBLEM_DETAIL_SELECT,
+    });
+
+    if (!problem) {
+        throw new AppError(StatusCodes.NOT_FOUND, "Problem not found.");
+    }
+
+    return problem;
+};
+
+/**
+ * Updates top-level fields, and optionally fully replaces the nested
+ * options/testCases set.
+ */
+const updateProblem = async (
+    id: string,
+    companyId: string,
+    payload: UpdateProblemInput,
+) => {
+    // tenant-scoped via withTenantScope
+    const whereClause = withTenantScope({ id, deletedAt: null }, companyId) as ProblemWhereInput;
+
+    const existing = await prisma.problem.findFirst({
+        where: whereClause,
+    });
+
+    if (!existing) {
+        throw new AppError(StatusCodes.NOT_FOUND, "Problem not found.");
+    }
+
+    if (payload.rubric !== undefined && existing.type !== "WRITTEN") {
+        throw new AppError(
+            StatusCodes.BAD_REQUEST,
+            "A rubric can only be set on a WRITTEN problem.",
+        );
+    }
+
+    const { options, testCases, mcqType, explanation, ...topLevel } = payload;
+
+    if (Object.keys(topLevel).length > 0) {
+        await prisma.problem.update({ where: { id }, data: topLevel });
+    }
+
+    if (
+        existing.type === "MCQ" &&
+        (options || mcqType !== undefined || explanation !== undefined)
+    ) {
+        const mcqProblem = await prisma.mcqProblem.findUniqueOrThrow({
+            where: { problemId: id },
+        });
+
+        if (mcqType !== undefined || explanation !== undefined) {
+            await prisma.mcqProblem.update({
+                where: { id: mcqProblem.id },
+                data: {
+                    ...(mcqType !== undefined && { type: mcqType }),
+                    ...(explanation !== undefined && { explanation }),
+                },
+            });
+        }
+
+        if (options) {
+            await prisma.$transaction(
+                options.map((option) =>
+                    prisma.mcqOption.upsert({
+                        where: {
+                            mcqProblemId_order: {
+                                mcqProblemId: mcqProblem.id,
+                                order: option.order,
+                            },
+                        },
+                        update: {
+                            optionText: option.optionText,
+                            isCorrect: option.isCorrect,
+                        },
+                        create: { mcqProblemId: mcqProblem.id, ...option },
+                    }),
+                ),
+            );
+        }
+    }
+
+    if (existing.type === "CODING" && testCases) {
+        const hasGradedResult = await prisma.testCaseResult.findFirst({
+            where: { testCase: { problemId: id } },
+        });
+
+        if (hasGradedResult) {
+            throw new AppError(
+                StatusCodes.CONFLICT,
+                "This problem's test cases can't be changed after candidates have been graded against them. Create a new problem instead.",
+            );
+        }
+
+        await prisma.testCase.deleteMany({ where: { problemId: id } });
+        await prisma.testCase.createMany({
+            data: testCases.map((testCase) => ({ problemId: id, ...testCase })),
+        });
+    }
+
+    return getProblemById(id, companyId);
+};
+
+/**
+ * Soft delete.
+ */
+const softDeleteProblem = async (id: string, companyId: string) => {
+    // tenant-scoped via withTenantScope
+    const whereClause = withTenantScope({ id, deletedAt: null }, companyId) as ProblemWhereInput;
+
+    const existing = await prisma.problem.findFirst({
+        where: whereClause,
+    });
+
+    if (!existing) {
+        throw new AppError(StatusCodes.NOT_FOUND, "Problem not found.");
+    }
+
+    const usedInLiveAssessment = await prisma.assessmentProblem.findFirst({
+        where: {
+            problemId: id,
+            assessment: { status: { in: ["PUBLISHED", "ACTIVE"] }, deletedAt: null },
+        },
+    });
+
+    if (usedInLiveAssessment) {
+        throw new AppError(
+            StatusCodes.CONFLICT,
+            "This problem is part of a published assessment and can't be deleted. Remove it from the assessment first.",
+        );
+    }
+
+    await prisma.problem.update({
+        where: { id },
+        data: { deletedAt: new Date() },
+    });
+
+    return { message: "Problem deleted successfully." };
+};
+
+export const problemService = {
+    createProblem,
+    getAllProblems,
+    getProblemById,
+    updateProblem,
+    softDeleteProblem,
+};
+
+===== src/app/modules/problem/problem.interface.ts =====
+import type { Difficulty, McqType } from "../../../generated/prisma/enums";
+
+export type McqOptionInput = {
+	optionText: string;
+	isCorrect: boolean;
+	order: number;
+};
+
+export type TestCaseInput = {
+	input?: string;
+	expectedOutput: string;
+	isSample?: boolean;
+	points?: number;
+	timeLimitMs?: number;
+	memoryLimitMb?: number;
+};
+
+type BaseProblemFields = {
+	title: string;
+	description: string;
+	difficulty?: Difficulty;
+	defaultMarks?: number;
+	isPublic?: boolean;
+};
+
+export type CreateProblemInput =
+	| (BaseProblemFields & {
+			type: "MCQ";
+			mcqType?: McqType;
+			explanation?: string;
+			options: McqOptionInput[];
+	  })
+	| (BaseProblemFields & {
+			type: "CODING";
+			timeLimitSeconds?: number;
+			testCases: TestCaseInput[];
+	  })
+	| (BaseProblemFields & { type: "WRITTEN"; rubric?: string });
+
+/**
+ * `type` is intentionally excluded - switching a problem from MCQ to
+ * CODING (or similar) after creation would orphan its nested data, so it's
+ * treated as immutable. Create a new problem instead.
+ * `rubric` only applies to WRITTEN problems.
+ */
+export type UpdateProblemInput = Partial<{
+	title: string;
+	description: string;
+	rubric: string;
+	difficulty: Difficulty;
+	defaultMarks: number;
+	isPublic: boolean;
+	timeLimitSeconds: number;
+	mcqType: McqType;
+	explanation: string;
+	options: McqOptionInput[];
+	testCases: TestCaseInput[];
+}>;
+
+===== src/app/modules/problem/problem.const.ts =====
+/**
+ * Full detail including nested MCQ options / test cases - used for single-
+ * problem view and immediately after create/update. This is the
+ * recruiter/admin view, so it includes the grading rubric.
+ */
+export const PROBLEM_DETAIL_SELECT = {
+	id: true,
+	title: true,
+	slug: true,
+	description: true,
+	rubric: true,
+	type: true,
+	difficulty: true,
+	defaultMarks: true,
+	timeLimitSeconds: true,
+	isPublic: true,
+	companyId: true,
+	createdById: true,
+	createdAt: true,
+	updatedAt: true,
+	mcqProblem: {
+		select: {
+			id: true,
+			type: true,
+			explanation: true,
+			options: {
+				select: { id: true, optionText: true, isCorrect: true, order: true },
+				orderBy: { order: "asc" },
+			},
+		},
+	},
+	testCases: {
+		select: {
+			id: true,
+			input: true,
+			expectedOutput: true,
+			isSample: true,
+			points: true,
+			timeLimitMs: true,
+			memoryLimitMb: true,
+		},
+		orderBy: { id: "asc" },
+	},
+} as const;
+
+/**
+ * Lean shape for browse/search - no nested options/test cases, so listing
+ * a company's whole problem bank doesn't ship megabytes of test data.
+ */
+export const PROBLEM_LIST_SELECT = {
+	id: true,
+	title: true,
+	slug: true,
+	type: true,
+	difficulty: true,
+	defaultMarks: true,
+	isPublic: true,
+	createdAt: true,
+} as const;

@@ -34,7 +34,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var import_node3 = require("better-auth/node");
 var import_cookie_parser = __toESM(require("cookie-parser"), 1);
 var import_cors = __toESM(require("cors"), 1);
-var import_express20 = __toESM(require("express"), 1);
+var import_express21 = __toESM(require("express"), 1);
 var import_helmet = __toESM(require("helmet"), 1);
 
 // src/app/config/index.ts
@@ -79,7 +79,8 @@ var envSchema = import_zod.z.object({
   N8N_WEBHOOK_URL: import_zod.z.string().url().optional(),
   N8N_WEBHOOK_SECRET: import_zod.z.string().min(32).optional(),
   N8N_API_KEY: import_zod.z.string().min(32).optional(),
-  AUTOMATION_LOCAL_DISPATCHER: import_zod.z.enum(["true", "false"]).default("false").transform((value) => value === "true")
+  AUTOMATION_LOCAL_DISPATCHER: import_zod.z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  GEMINI_API_KEY: import_zod.z.string().min(20).optional()
 });
 var parsed = envSchema.safeParse(process.env);
 if (!parsed.success) {
@@ -159,6 +160,9 @@ var config = {
     webhookSecret: env.N8N_WEBHOOK_SECRET,
     apiKey: env.N8N_API_KEY,
     localDispatcher: env.AUTOMATION_LOCAL_DISPATCHER
+  },
+  gemini: {
+    apiKey: env.GEMINI_API_KEY
   }
 };
 var config_default = config;
@@ -3104,7 +3108,7 @@ router.post(
 var webhookRoutes = router;
 
 // src/app/routes/index.ts
-var import_express19 = require("express");
+var import_express20 = require("express");
 
 // src/app/modules/admin/admin.routes.ts
 var import_express2 = require("express");
@@ -4888,10 +4892,177 @@ var idempotency = () => {
 };
 
 // src/app/modules/attempt/attempt.controller.ts
-var import_http_status_codes19 = require("http-status-codes");
+var import_http_status_codes20 = require("http-status-codes");
 
 // src/app/modules/attempt/attempt.service.ts
+var import_http_status_codes19 = require("http-status-codes");
+
+// src/app/modules/automation/automation.const.ts
+var AUTOMATION_DISPATCH = {
+  BATCH_SIZE: 10,
+  REQUEST_TIMEOUT_MS: 8e3,
+  LOCK_TIMEOUT_MS: 5 * 60 * 1e3,
+  BASE_RETRY_DELAY_SECONDS: 30,
+  MAX_RETRY_DELAY_SECONDS: 3600,
+  LOCAL_INTERVAL_MS: 5e3
+};
+var AUTOMATION_EVENT_TYPES = {
+  SYSTEM_TEST: "system.test",
+  ATTEMPT_SUBMITTED: "attempt.submitted",
+  ATTEMPT_AUTO_SUBMITTED: "attempt.auto_submitted",
+  INVITATION_CREATED: "invitation.created",
+  SUBMISSION_NEEDS_AI_EVALUATION: "submission.needs_ai_evaluation",
+  EVALUATION_REVIEW_NEEDED: "evaluation.review_needed"
+};
+
+// src/app/modules/automation/automation.service.ts
 var import_http_status_codes18 = require("http-status-codes");
+
+// src/app/modules/automation/automation.signature.ts
+var import_node_crypto3 = require("crypto");
+var signAutomationPayload = (body, secret, timestamp) => (0, import_node_crypto3.createHmac)("sha256", secret).update(`${timestamp}.${body}`).digest("hex");
+var safeEqual = (a, b) => {
+  const aBuffer = Buffer.from(a);
+  const bBuffer = Buffer.from(b);
+  return aBuffer.length === bBuffer.length && (0, import_node_crypto3.timingSafeEqual)(aBuffer, bBuffer);
+};
+
+// src/app/modules/automation/automation.service.ts
+var emitEvent = async (input, db = prisma) => {
+  await db.automationEvent.createMany({
+    data: [
+      {
+        eventType: input.eventType,
+        aggregateType: input.aggregateType,
+        aggregateId: input.aggregateId,
+        payload: input.payload,
+        dedupeKey: input.dedupeKey ?? null
+      }
+    ],
+    skipDuplicates: true
+  });
+};
+var claimEvents = async (limit) => {
+  const now = /* @__PURE__ */ new Date();
+  const staleBefore = new Date(
+    now.getTime() - AUTOMATION_DISPATCH.LOCK_TIMEOUT_MS
+  );
+  const claimable = {
+    OR: [
+      {
+        status: "PENDING",
+        OR: [{ nextRetryAt: null }, { nextRetryAt: { lte: now } }]
+      },
+      { status: "PROCESSING", lockedAt: { lt: staleBefore } }
+    ]
+  };
+  const candidates = await prisma.automationEvent.findMany({
+    where: claimable,
+    orderBy: { createdAt: "asc" },
+    take: limit,
+    select: { id: true }
+  });
+  if (candidates.length === 0) return [];
+  const ids = candidates.map((candidate) => candidate.id);
+  await prisma.automationEvent.updateMany({
+    where: { AND: [{ id: { in: ids } }, claimable] },
+    data: { status: "PROCESSING", lockedAt: now }
+  });
+  return prisma.automationEvent.findMany({
+    where: { id: { in: ids }, status: "PROCESSING", lockedAt: now },
+    orderBy: { createdAt: "asc" }
+  });
+};
+var markDelivered = async (id) => {
+  await prisma.automationEvent.update({
+    where: { id },
+    data: {
+      status: "DELIVERED",
+      deliveredAt: /* @__PURE__ */ new Date(),
+      lockedAt: null,
+      lastError: null
+    }
+  });
+};
+var markFailedAttempt = async (event, message) => {
+  const retryCount = event.retryCount + 1;
+  const exhausted = retryCount >= event.maxRetries;
+  const delaySeconds = Math.min(
+    AUTOMATION_DISPATCH.BASE_RETRY_DELAY_SECONDS * 2 ** retryCount,
+    AUTOMATION_DISPATCH.MAX_RETRY_DELAY_SECONDS
+  );
+  await prisma.automationEvent.update({
+    where: { id: event.id },
+    data: {
+      status: exhausted ? "FAILED" : "PENDING",
+      retryCount,
+      lockedAt: null,
+      lastError: message.slice(0, 500),
+      nextRetryAt: exhausted ? null : new Date(Date.now() + delaySeconds * 1e3)
+    }
+  });
+};
+var deliverEvent = async (event, webhookUrl, webhookSecret) => {
+  const body = JSON.stringify({
+    id: event.id,
+    type: event.eventType,
+    aggregateType: event.aggregateType,
+    aggregateId: event.aggregateId,
+    occurredAt: event.createdAt.toISOString(),
+    data: event.payload
+  });
+  const timestamp = Date.now().toString();
+  const signature = signAutomationPayload(body, webhookSecret, timestamp);
+  try {
+    const response = await fetch(webhookUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Event-Type": event.eventType,
+        "X-Idempotency-Key": event.id,
+        "X-Timestamp": timestamp,
+        "X-Signature": `sha256=${signature}`
+      },
+      body,
+      signal: AbortSignal.timeout(AUTOMATION_DISPATCH.REQUEST_TIMEOUT_MS)
+    });
+    if (!response.ok) {
+      throw new Error(`n8n responded with status ${response.status}`);
+    }
+    await markDelivered(event.id);
+    return true;
+  } catch (error) {
+    await markFailedAttempt(
+      event,
+      error instanceof Error ? error.message : "Unknown delivery error"
+    );
+    return false;
+  }
+};
+var dispatchPendingEvents = async () => {
+  const { webhookUrl, webhookSecret } = config_default.n8n;
+  if (!webhookUrl || !webhookSecret) {
+    throw new appError_default(
+      import_http_status_codes18.StatusCodes.SERVICE_UNAVAILABLE,
+      "n8n webhook is not configured.",
+      "AUTOMATION_NOT_CONFIGURED"
+    );
+  }
+  const events = await claimEvents(AUTOMATION_DISPATCH.BATCH_SIZE);
+  const results = await Promise.all(
+    events.map((event) => deliverEvent(event, webhookUrl, webhookSecret))
+  );
+  const delivered = results.filter(Boolean).length;
+  return {
+    claimed: events.length,
+    delivered,
+    failed: events.length - delivered
+  };
+};
+var automationService = {
+  emitEvent,
+  dispatchPendingEvents
+};
 
 // src/app/modules/attempt/attempt.const.ts
 var ATTEMPT_PROBLEM_SELECT = {
@@ -5025,6 +5196,12 @@ var SUBMISSION_GRADING_SELECT = {
       status: true,
       isAutoEvaluated: true,
       feedback: true,
+      aiScore: true,
+      aiFeedback: true,
+      aiModel: true,
+      aiEvaluatedAt: true,
+      reviewStatus: true,
+      reviewedAt: true,
       evaluatedAt: true,
       evaluatorId: true
     }
@@ -5123,6 +5300,24 @@ var gradeSubmissionForProblem = async (params) => {
       isAutoEvaluated: false
     }
   });
+  if (problemType === "WRITTEN") {
+    try {
+      await automationService.emitEvent({
+        eventType: AUTOMATION_EVENT_TYPES.SUBMISSION_NEEDS_AI_EVALUATION,
+        aggregateType: "Submission",
+        aggregateId: submission.id,
+        dedupeKey: `${AUTOMATION_EVENT_TYPES.SUBMISSION_NEEDS_AI_EVALUATION}:${submission.id}`,
+        payload: {
+          submissionId: submission.id,
+          attemptId,
+          problemId,
+          maxScore: marks
+        }
+      });
+    } catch (error) {
+      console.error("Failed to emit AI evaluation event", error);
+    }
+  }
 };
 var recomputeResult = async (attemptId) => {
   const attempt = await prisma.assessmentAttempt.findUniqueOrThrow({
@@ -5232,6 +5427,25 @@ var finalizeAttempt = async (attemptId) => {
       data: { status: "COMPLETED", completedAt: /* @__PURE__ */ new Date() }
     });
   }
+  try {
+    const eventType = isLate ? AUTOMATION_EVENT_TYPES.ATTEMPT_AUTO_SUBMITTED : AUTOMATION_EVENT_TYPES.ATTEMPT_SUBMITTED;
+    await automationService.emitEvent({
+      eventType,
+      aggregateType: "AssessmentAttempt",
+      aggregateId: attemptId,
+      dedupeKey: `${eventType}:${attemptId}`,
+      payload: {
+        attemptId,
+        assessmentId: attempt.assessmentId,
+        candidateId: attempt.candidateId,
+        attemptNumber: attempt.attemptNumber,
+        isLate,
+        finalizedAt: (/* @__PURE__ */ new Date()).toISOString()
+      }
+    });
+  } catch (error) {
+    console.error("Failed to emit attempt finalized event", error);
+  }
 };
 var getAttemptById = async (id, requester) => {
   let attempt = await prisma.assessmentAttempt.findUnique({
@@ -5239,12 +5453,12 @@ var getAttemptById = async (id, requester) => {
     select: ATTEMPT_DETAIL_SELECT
   });
   if (!attempt) {
-    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(import_http_status_codes19.StatusCodes.NOT_FOUND, "Attempt not found.");
   }
   const isOwner = attempt.candidateId === requester.id;
   const isOwningRecruiter = requester.companyId !== void 0 && attempt.assessment.companyId === requester.companyId;
   if (requester.role !== "ADMIN" && !isOwner && !isOwningRecruiter) {
-    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(import_http_status_codes19.StatusCodes.NOT_FOUND, "Attempt not found.");
   }
   if (attempt.status === "IN_PROGRESS" && attempt.expiresAt < /* @__PURE__ */ new Date()) {
     await finalizeAttempt(id);
@@ -5267,24 +5481,24 @@ var startAttempt = async (candidateId, assessmentId) => {
     where: { id: assessmentId, deletedAt: null }
   });
   if (!assessment) {
-    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(import_http_status_codes19.StatusCodes.NOT_FOUND, "Assessment not found.");
   }
   if (assessment.status !== "PUBLISHED" && assessment.status !== "ACTIVE") {
     throw new appError_default(
-      import_http_status_codes18.StatusCodes.CONFLICT,
+      import_http_status_codes19.StatusCodes.CONFLICT,
       "This assessment is not currently open for attempts."
     );
   }
   const now = /* @__PURE__ */ new Date();
   if (assessment.startAt && now < assessment.startAt) {
     throw new appError_default(
-      import_http_status_codes18.StatusCodes.CONFLICT,
+      import_http_status_codes19.StatusCodes.CONFLICT,
       "This assessment has not started yet."
     );
   }
   if (assessment.endAt && now > assessment.endAt) {
     throw new appError_default(
-      import_http_status_codes18.StatusCodes.CONFLICT,
+      import_http_status_codes19.StatusCodes.CONFLICT,
       "This assessment's window has closed."
     );
   }
@@ -5297,7 +5511,7 @@ var startAttempt = async (candidateId, assessmentId) => {
   });
   if (!invitation) {
     throw new appError_default(
-      import_http_status_codes18.StatusCodes.FORBIDDEN,
+      import_http_status_codes19.StatusCodes.FORBIDDEN,
       "You need an accepted invitation to start this assessment."
     );
   }
@@ -5318,7 +5532,7 @@ var startAttempt = async (candidateId, assessmentId) => {
   });
   if (attemptCount >= assessment.maxAttempts) {
     throw new appError_default(
-      import_http_status_codes18.StatusCodes.CONFLICT,
+      import_http_status_codes19.StatusCodes.CONFLICT,
       `You have used all ${assessment.maxAttempts} allowed attempt(s) for this assessment.`
     );
   }
@@ -5352,25 +5566,25 @@ var saveSubmission = async (attemptId, candidateId, problemId, payload) => {
     }
   });
   if (!attempt) {
-    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(import_http_status_codes19.StatusCodes.NOT_FOUND, "Attempt not found.");
   }
   if (attempt.status === "IN_PROGRESS" && attempt.expiresAt < /* @__PURE__ */ new Date()) {
     await finalizeAttempt(attemptId);
     throw new appError_default(
-      import_http_status_codes18.StatusCodes.GONE,
-      "Time is up \u2014 this attempt has been auto-submitted."
+      import_http_status_codes19.StatusCodes.GONE,
+      "Time is up - this attempt has been auto-submitted."
     );
   }
   if (attempt.status !== "IN_PROGRESS") {
     throw new appError_default(
-      import_http_status_codes18.StatusCodes.CONFLICT,
-      `Cannot modify answers \u2014 this attempt is already ${attempt.status.toLowerCase()}.`
+      import_http_status_codes19.StatusCodes.CONFLICT,
+      `Cannot modify answers - this attempt is already ${attempt.status.toLowerCase()}.`
     );
   }
   const assessmentProblem = attempt.assessment.assessmentProblems[0];
   if (!assessmentProblem) {
     throw new appError_default(
-      import_http_status_codes18.StatusCodes.BAD_REQUEST,
+      import_http_status_codes19.StatusCodes.BAD_REQUEST,
       "This problem is not part of this assessment."
     );
   }
@@ -5380,7 +5594,7 @@ var saveSubmission = async (attemptId, candidateId, problemId, payload) => {
   if (problem.type === "MCQ") {
     if (payload.selectedOptionIds === void 0) {
       throw new appError_default(
-        import_http_status_codes18.StatusCodes.BAD_REQUEST,
+        import_http_status_codes19.StatusCodes.BAD_REQUEST,
         "selectedOptionIds is required for an MCQ problem."
       );
     }
@@ -5399,21 +5613,21 @@ var saveSubmission = async (attemptId, candidateId, problemId, payload) => {
       );
       if (hasInvalidOption) {
         throw new appError_default(
-          import_http_status_codes18.StatusCodes.BAD_REQUEST,
+          import_http_status_codes19.StatusCodes.BAD_REQUEST,
           "One or more selected options do not belong to this problem."
         );
       }
       if (mcqProblem.type === "SINGLE_CHOICE" && selectedOptionIds.length > 1) {
         throw new appError_default(
-          import_http_status_codes18.StatusCodes.BAD_REQUEST,
-          "This is a single-choice question \u2014 select only one option."
+          import_http_status_codes19.StatusCodes.BAD_REQUEST,
+          "This is a single-choice question - select only one option."
         );
       }
     }
   } else if (problem.type === "CODING") {
     if (payload.code === void 0) {
       throw new appError_default(
-        import_http_status_codes18.StatusCodes.BAD_REQUEST,
+        import_http_status_codes19.StatusCodes.BAD_REQUEST,
         "code is required for a CODING problem."
       );
     }
@@ -5421,7 +5635,7 @@ var saveSubmission = async (attemptId, candidateId, problemId, payload) => {
   } else {
     if (payload.answerText === void 0) {
       throw new appError_default(
-        import_http_status_codes18.StatusCodes.BAD_REQUEST,
+        import_http_status_codes19.StatusCodes.BAD_REQUEST,
         "answerText is required for a WRITTEN problem."
       );
     }
@@ -5473,11 +5687,11 @@ var submitAttempt = async (attemptId, candidateId) => {
     where: { id: attemptId, candidateId }
   });
   if (!attempt) {
-    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(import_http_status_codes19.StatusCodes.NOT_FOUND, "Attempt not found.");
   }
   if (attempt.status !== "IN_PROGRESS") {
     throw new appError_default(
-      import_http_status_codes18.StatusCodes.CONFLICT,
+      import_http_status_codes19.StatusCodes.CONFLICT,
       `This attempt is already ${attempt.status.toLowerCase()}.`
     );
   }
@@ -5489,7 +5703,7 @@ var recordProctoringEvent = async (attemptId, candidateId, payload) => {
     where: { id: attemptId, candidateId }
   });
   if (!attempt) {
-    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(import_http_status_codes19.StatusCodes.NOT_FOUND, "Attempt not found.");
   }
   if (attempt.status !== "IN_PROGRESS") {
     return { recorded: false };
@@ -5533,12 +5747,12 @@ var getProctoringEvents = async (attemptId, requester) => {
     }
   });
   if (!attempt) {
-    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(import_http_status_codes19.StatusCodes.NOT_FOUND, "Attempt not found.");
   }
   const isOwner = attempt.candidateId === requester.id;
   const isOwningRecruiter = requester.companyId !== void 0 && attempt.assessment.companyId === requester.companyId;
   if (requester.role !== "ADMIN" && !isOwner && !isOwningRecruiter) {
-    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(import_http_status_codes19.StatusCodes.NOT_FOUND, "Attempt not found.");
   }
   return prisma.proctoringEvent.findMany({
     where: { attemptId },
@@ -5555,18 +5769,18 @@ var getProctoringEventById = async (attemptId, eventId, requester) => {
     }
   });
   if (!attempt) {
-    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(import_http_status_codes19.StatusCodes.NOT_FOUND, "Attempt not found.");
   }
   const isOwner = attempt.candidateId === requester.id;
   const isOwningRecruiter = requester.companyId !== void 0 && attempt.assessment.companyId === requester.companyId;
   if (requester.role !== "ADMIN" && !isOwner && !isOwningRecruiter) {
-    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(import_http_status_codes19.StatusCodes.NOT_FOUND, "Attempt not found.");
   }
   const event = await prisma.proctoringEvent.findFirst({
     where: { id: eventId, attemptId }
   });
   if (!event) {
-    throw new appError_default(import_http_status_codes18.StatusCodes.NOT_FOUND, "Proctoring event not found.");
+    throw new appError_default(import_http_status_codes19.StatusCodes.NOT_FOUND, "Proctoring event not found.");
   }
   return event;
 };
@@ -5588,7 +5802,7 @@ var startAttempt2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.body.assessmentId
   );
-  res.status(import_http_status_codes19.StatusCodes.CREATED).json({
+  res.status(import_http_status_codes20.StatusCodes.CREATED).json({
     success: true,
     message: "Attempt started successfully.",
     data: attempt
@@ -5597,7 +5811,7 @@ var startAttempt2 = catchAsync(async (req, res) => {
 var getMyAttempts2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const attempts = await attemptService.getMyAttempts(currentUser.id);
-  res.status(import_http_status_codes19.StatusCodes.OK).json({
+  res.status(import_http_status_codes20.StatusCodes.OK).json({
     success: true,
     message: "Attempts retrieved successfully.",
     data: attempts
@@ -5611,7 +5825,7 @@ var getAttemptById2 = catchAsync(async (req, res) => {
     role: currentUser.role,
     ...companyId !== void 0 && { companyId }
   });
-  res.status(import_http_status_codes19.StatusCodes.OK).json({
+  res.status(import_http_status_codes20.StatusCodes.OK).json({
     success: true,
     message: "Attempt retrieved successfully.",
     data: attempt
@@ -5625,7 +5839,7 @@ var saveSubmission2 = catchAsync(async (req, res) => {
     req.params.problemId,
     req.body
   );
-  res.status(import_http_status_codes19.StatusCodes.OK).json({
+  res.status(import_http_status_codes20.StatusCodes.OK).json({
     success: true,
     message: "Answer saved successfully.",
     data: submission
@@ -5637,7 +5851,7 @@ var submitAttempt2 = catchAsync(async (req, res) => {
     req.params.id,
     currentUser.id
   );
-  res.status(import_http_status_codes19.StatusCodes.OK).json({
+  res.status(import_http_status_codes20.StatusCodes.OK).json({
     success: true,
     message: "Attempt submitted successfully.",
     data: attempt
@@ -5651,7 +5865,7 @@ var recordProctoringEvent2 = catchAsync(
       currentUser.id,
       req.body
     );
-    res.status(import_http_status_codes19.StatusCodes.OK).json({
+    res.status(import_http_status_codes20.StatusCodes.OK).json({
       success: true,
       message: result.recorded ? "Event recorded." : "Attempt is no longer active; event ignored.",
       data: result
@@ -5669,7 +5883,7 @@ var getProctoringEvents2 = catchAsync(async (req, res) => {
       ...companyId !== void 0 && { companyId }
     }
   );
-  res.status(import_http_status_codes19.StatusCodes.OK).json({
+  res.status(import_http_status_codes20.StatusCodes.OK).json({
     success: true,
     message: "Proctoring events retrieved successfully.",
     data: events
@@ -5688,7 +5902,7 @@ var getProctoringEventById2 = catchAsync(
         ...companyId !== void 0 && { companyId }
       }
     );
-    res.status(import_http_status_codes19.StatusCodes.OK).json({
+    res.status(import_http_status_codes20.StatusCodes.OK).json({
       success: true,
       message: "Proctoring event retrieved successfully.",
       data: event
@@ -5803,7 +6017,7 @@ var import_express5 = require("express");
 
 // src/app/modules/auth/auth.controller.ts
 var import_node2 = require("better-auth/node");
-var import_http_status_codes21 = require("http-status-codes");
+var import_http_status_codes22 = require("http-status-codes");
 
 // src/app/utils/authCookies.ts
 var applyAuthCookies = (headers, res) => {
@@ -5818,7 +6032,7 @@ var applyAuthCookies = (headers, res) => {
 };
 
 // src/app/modules/auth/auth.service.ts
-var import_http_status_codes20 = require("http-status-codes");
+var import_http_status_codes21 = require("http-status-codes");
 
 // src/app/modules/auth/auth.const.ts
 var AUTH_FALLBACK_MESSAGES = {
@@ -5950,7 +6164,7 @@ var register2 = catchAsync(async (req, res) => {
     (0, import_node2.fromNodeHeaders)(req.headers)
   );
   applyAuthCookies(headers, res);
-  res.status(import_http_status_codes21.StatusCodes.CREATED).json({
+  res.status(import_http_status_codes22.StatusCodes.CREATED).json({
     success: true,
     message: "Registered successfully. Please check your email for the verification code.",
     data
@@ -5962,7 +6176,7 @@ var login2 = catchAsync(async (req, res) => {
     (0, import_node2.fromNodeHeaders)(req.headers)
   );
   applyAuthCookies(headers, res);
-  res.status(import_http_status_codes21.StatusCodes.OK).json({
+  res.status(import_http_status_codes22.StatusCodes.OK).json({
     success: true,
     message: "Logged in successfully.",
     data
@@ -5973,7 +6187,7 @@ var logout2 = catchAsync(async (req, res) => {
     (0, import_node2.fromNodeHeaders)(req.headers)
   );
   applyAuthCookies(headers, res);
-  res.status(import_http_status_codes21.StatusCodes.OK).json({
+  res.status(import_http_status_codes22.StatusCodes.OK).json({
     success: true,
     message: "Logged out successfully.",
     data
@@ -5984,7 +6198,7 @@ var refreshToken2 = catchAsync(async (req, res) => {
     (0, import_node2.fromNodeHeaders)(req.headers)
   );
   applyAuthCookies(headers, res);
-  res.status(import_http_status_codes21.StatusCodes.OK).json({
+  res.status(import_http_status_codes22.StatusCodes.OK).json({
     success: true,
     message: "Session refreshed successfully.",
     data
@@ -5992,7 +6206,7 @@ var refreshToken2 = catchAsync(async (req, res) => {
 });
 var sendEmailOtp2 = catchAsync(async (req, res) => {
   const { data } = await authService.sendEmailOtp(req.body);
-  res.status(import_http_status_codes21.StatusCodes.OK).json({
+  res.status(import_http_status_codes22.StatusCodes.OK).json({
     success: true,
     message: "Verification code sent.",
     data
@@ -6000,7 +6214,7 @@ var sendEmailOtp2 = catchAsync(async (req, res) => {
 });
 var verifyEmailOtp2 = catchAsync(async (req, res) => {
   const { data } = await authService.verifyEmailOtp(req.body);
-  res.status(import_http_status_codes21.StatusCodes.OK).json({
+  res.status(import_http_status_codes22.StatusCodes.OK).json({
     success: true,
     message: "Email verified successfully.",
     data
@@ -6008,7 +6222,7 @@ var verifyEmailOtp2 = catchAsync(async (req, res) => {
 });
 var resetPasswordWithOtp2 = catchAsync(async (req, res) => {
   const { data } = await authService.resetPasswordWithOtp(req.body);
-  res.status(import_http_status_codes21.StatusCodes.OK).json({
+  res.status(import_http_status_codes22.StatusCodes.OK).json({
     success: true,
     message: "Password reset successfully. You can now log in.",
     data
@@ -6020,14 +6234,14 @@ var changePassword2 = catchAsync(async (req, res) => {
     (0, import_node2.fromNodeHeaders)(req.headers)
   );
   applyAuthCookies(headers, res);
-  res.status(import_http_status_codes21.StatusCodes.OK).json({
+  res.status(import_http_status_codes22.StatusCodes.OK).json({
     success: true,
     message: "Password changed successfully.",
     data
   });
 });
 var getMe = catchAsync(async (req, res) => {
-  res.status(import_http_status_codes21.StatusCodes.OK).json({
+  res.status(import_http_status_codes22.StatusCodes.OK).json({
     success: true,
     message: "Current user retrieved successfully.",
     data: req.user
@@ -6136,7 +6350,7 @@ var authRoutes = router5;
 var import_express6 = require("express");
 
 // src/app/middlewares/upload.ts
-var import_http_status_codes22 = require("http-status-codes");
+var import_http_status_codes23 = require("http-status-codes");
 var import_multer2 = __toESM(require("multer"), 1);
 var storage = import_multer2.default.memoryStorage();
 var IMAGE_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
@@ -6154,7 +6368,7 @@ var makeUploader = (allowedMimeTypes, maxSizeBytes, label) => (0, import_multer2
     if (!allowedMimeTypes.includes(file.mimetype)) {
       cb(
         new appError_default(
-          import_http_status_codes22.StatusCodes.BAD_REQUEST,
+          import_http_status_codes23.StatusCodes.BAD_REQUEST,
           `Only ${label} files are allowed.`
         )
       );
@@ -6175,7 +6389,7 @@ var documentUpload = makeUploader(
 );
 
 // src/app/middlewares/validateRequestWithFile.ts
-var import_http_status_codes23 = require("http-status-codes");
+var import_http_status_codes24 = require("http-status-codes");
 var validateRequestWithFile = (schema) => {
   return async (req, res, next) => {
     if (typeof req.body?.data === "string") {
@@ -6184,7 +6398,7 @@ var validateRequestWithFile = (schema) => {
       } catch {
         return next(
           new appError_default(
-            import_http_status_codes23.StatusCodes.BAD_REQUEST,
+            import_http_status_codes24.StatusCodes.BAD_REQUEST,
             "Invalid JSON in 'data' field."
           )
         );
@@ -6195,13 +6409,13 @@ var validateRequestWithFile = (schema) => {
 };
 
 // src/app/modules/candidate/candidate.controller.ts
-var import_http_status_codes26 = require("http-status-codes");
+var import_http_status_codes27 = require("http-status-codes");
 
 // src/app/modules/candidate/candidate.service.ts
-var import_http_status_codes25 = require("http-status-codes");
+var import_http_status_codes26 = require("http-status-codes");
 
 // src/app/utils/fileUploader.ts
-var import_http_status_codes24 = require("http-status-codes");
+var import_http_status_codes25 = require("http-status-codes");
 
 // src/lib/cloudinary.ts
 var import_cloudinary = require("cloudinary");
@@ -6228,7 +6442,7 @@ var getCloudinary = () => {
 var uploadFileToCloudinary = async (buffer, fileName, folder = "uploads") => {
   if (!buffer || !fileName) {
     throw new appError_default(
-      import_http_status_codes24.StatusCodes.BAD_REQUEST,
+      import_http_status_codes25.StatusCodes.BAD_REQUEST,
       "File buffer or file name is missing."
     );
   }
@@ -6242,7 +6456,7 @@ var uploadFileToCloudinary = async (buffer, fileName, folder = "uploads") => {
         if (error || !result) {
           return reject(
             new appError_default(
-              import_http_status_codes24.StatusCodes.INTERNAL_SERVER_ERROR,
+              import_http_status_codes25.StatusCodes.INTERNAL_SERVER_ERROR,
               "Cloudinary upload failed."
             )
           );
@@ -6307,7 +6521,7 @@ var upsertMyProfile = async (userId, payload, file) => {
     where: { id: userId, deletedAt: null }
   });
   if (!user) {
-    throw new appError_default(import_http_status_codes25.StatusCodes.NOT_FOUND, "User not found.");
+    throw new appError_default(import_http_status_codes26.StatusCodes.NOT_FOUND, "User not found.");
   }
   let resumeUrl;
   if (file) {
@@ -6338,7 +6552,7 @@ var getMyProfile = async (userId) => {
     select: CANDIDATE_OWN_SELECT
   });
   if (!profile) {
-    throw new appError_default(import_http_status_codes25.StatusCodes.NOT_FOUND, "Candidate profile not found.");
+    throw new appError_default(import_http_status_codes26.StatusCodes.NOT_FOUND, "Candidate profile not found.");
   }
   return profile;
 };
@@ -6348,7 +6562,7 @@ var getCandidateProfileById = async (id, requesterRole) => {
     select: CANDIDATE_DETAIL_SELECT
   });
   if (!profile) {
-    throw new appError_default(import_http_status_codes25.StatusCodes.NOT_FOUND, "Candidate profile not found.");
+    throw new appError_default(import_http_status_codes26.StatusCodes.NOT_FOUND, "Candidate profile not found.");
   }
   return profile;
 };
@@ -6370,7 +6584,7 @@ var upsertMyProfile2 = catchAsync(async (req, res) => {
     req.body,
     req.file
   );
-  res.status(import_http_status_codes26.StatusCodes.OK).json({
+  res.status(import_http_status_codes27.StatusCodes.OK).json({
     success: true,
     message: "Profile saved successfully.",
     data: profile
@@ -6379,7 +6593,7 @@ var upsertMyProfile2 = catchAsync(async (req, res) => {
 var getMyProfile2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const profile = await candidateService.getMyProfile(currentUser.id);
-  res.status(import_http_status_codes26.StatusCodes.OK).json({
+  res.status(import_http_status_codes27.StatusCodes.OK).json({
     success: true,
     message: "Profile retrieved successfully.",
     data: profile
@@ -6392,7 +6606,7 @@ var getCandidateProfileById2 = catchAsync(
       req.params.id,
       currentUser.role
     );
-    res.status(import_http_status_codes26.StatusCodes.OK).json({
+    res.status(import_http_status_codes27.StatusCodes.OK).json({
       success: true,
       message: "Candidate profile retrieved successfully.",
       data: profile
@@ -6405,7 +6619,7 @@ var getAllCandidates2 = catchAsync(async (req, res) => {
     req.query,
     currentUser.role
   );
-  res.status(import_http_status_codes26.StatusCodes.OK).json({
+  res.status(import_http_status_codes27.StatusCodes.OK).json({
     success: true,
     message: "Candidates retrieved successfully.",
     meta: result.meta,
@@ -6552,10 +6766,10 @@ var candidateRoutes = router6;
 var import_express7 = require("express");
 
 // src/app/modules/company/company.controller.ts
-var import_http_status_codes28 = require("http-status-codes");
+var import_http_status_codes29 = require("http-status-codes");
 
 // src/app/modules/company/company.service.ts
-var import_http_status_codes27 = require("http-status-codes");
+var import_http_status_codes28 = require("http-status-codes");
 
 // src/app/modules/company/company.const.ts
 var COMPANY_DETAIL_SELECT = {
@@ -6641,11 +6855,11 @@ var registerCompany = async (userId, payload) => {
     select: { role: true }
   });
   if (!user) {
-    throw new appError_default(import_http_status_codes27.StatusCodes.NOT_FOUND, "User not found.");
+    throw new appError_default(import_http_status_codes28.StatusCodes.NOT_FOUND, "User not found.");
   }
   if (user.role === "ADMIN") {
     throw new appError_default(
-      import_http_status_codes27.StatusCodes.FORBIDDEN,
+      import_http_status_codes28.StatusCodes.FORBIDDEN,
       "Admin accounts can't register a company."
     );
   }
@@ -6654,7 +6868,7 @@ var registerCompany = async (userId, payload) => {
   });
   if (existing && !existing.deletedAt) {
     throw new appError_default(
-      import_http_status_codes27.StatusCodes.CONFLICT,
+      import_http_status_codes28.StatusCodes.CONFLICT,
       "You already have a company registered."
     );
   }
@@ -6742,7 +6956,7 @@ var registerCompany = async (userId, payload) => {
   } catch (error) {
     if (isUniqueConstraintError(error)) {
       throw new appError_default(
-        import_http_status_codes27.StatusCodes.CONFLICT,
+        import_http_status_codes28.StatusCodes.CONFLICT,
         "A company with these details already exists. Please try again."
       );
     }
@@ -6761,11 +6975,11 @@ var getCompanyById = async (id, requesterId, requesterRole) => {
     select: COMPANY_DETAIL_SELECT
   });
   if (!company) {
-    throw new appError_default(import_http_status_codes27.StatusCodes.NOT_FOUND, "Company not found.");
+    throw new appError_default(import_http_status_codes28.StatusCodes.NOT_FOUND, "Company not found.");
   }
   const canSeeUnverified = requesterRole === "ADMIN" || company.ownerId === requesterId;
   if (!company.isVerified && !canSeeUnverified) {
-    throw new appError_default(import_http_status_codes27.StatusCodes.NOT_FOUND, "Company not found.");
+    throw new appError_default(import_http_status_codes28.StatusCodes.NOT_FOUND, "Company not found.");
   }
   return company;
 };
@@ -6776,7 +6990,7 @@ var getMyCompany = async (userId) => {
   });
   if (!company) {
     throw new appError_default(
-      import_http_status_codes27.StatusCodes.NOT_FOUND,
+      import_http_status_codes28.StatusCodes.NOT_FOUND,
       "You don't have a registered company yet."
     );
   }
@@ -6788,7 +7002,7 @@ var updateMyCompany = async (userId, payload, file) => {
   });
   if (!existing) {
     throw new appError_default(
-      import_http_status_codes27.StatusCodes.NOT_FOUND,
+      import_http_status_codes28.StatusCodes.NOT_FOUND,
       "You don't have a registered company yet."
     );
   }
@@ -6847,13 +7061,13 @@ var requestVerification = async (userId) => {
   });
   if (!company) {
     throw new appError_default(
-      import_http_status_codes27.StatusCodes.NOT_FOUND,
+      import_http_status_codes28.StatusCodes.NOT_FOUND,
       "You don't have a registered company yet."
     );
   }
   if (company.isVerified) {
     throw new appError_default(
-      import_http_status_codes27.StatusCodes.CONFLICT,
+      import_http_status_codes28.StatusCodes.CONFLICT,
       "Your company is already verified."
     );
   }
@@ -6870,14 +7084,14 @@ var requestVerification = async (userId) => {
   });
   if (recentlyNotified) {
     throw new appError_default(
-      import_http_status_codes27.StatusCodes.TOO_MANY_REQUESTS,
+      import_http_status_codes28.StatusCodes.TOO_MANY_REQUESTS,
       "Admins were already notified in the last 24 hours. Please try again later."
     );
   }
   const notified = await notifyAdminsOfPendingCompany(company, true);
   if (notified === 0) {
     throw new appError_default(
-      import_http_status_codes27.StatusCodes.SERVICE_UNAVAILABLE,
+      import_http_status_codes28.StatusCodes.SERVICE_UNAVAILABLE,
       "No administrator is available to review your company right now."
     );
   }
@@ -6888,10 +7102,10 @@ var verifyCompany = async (id, actorId) => {
     where: { id, deletedAt: null }
   });
   if (!company) {
-    throw new appError_default(import_http_status_codes27.StatusCodes.NOT_FOUND, "Company not found.");
+    throw new appError_default(import_http_status_codes28.StatusCodes.NOT_FOUND, "Company not found.");
   }
   if (company.isVerified) {
-    throw new appError_default(import_http_status_codes27.StatusCodes.CONFLICT, "Company is already verified.");
+    throw new appError_default(import_http_status_codes28.StatusCodes.CONFLICT, "Company is already verified.");
   }
   const [updated] = await prisma.$transaction([
     prisma.company.update({
@@ -6918,12 +7132,12 @@ var softDeleteCompany = async (id, actorId, actorRole) => {
     where: { id, deletedAt: null }
   });
   if (!company) {
-    throw new appError_default(import_http_status_codes27.StatusCodes.NOT_FOUND, "Company not found.");
+    throw new appError_default(import_http_status_codes28.StatusCodes.NOT_FOUND, "Company not found.");
   }
   const isOwner = company.ownerId === actorId;
   if (!isOwner && actorRole !== "ADMIN") {
     throw new appError_default(
-      import_http_status_codes27.StatusCodes.FORBIDDEN,
+      import_http_status_codes28.StatusCodes.FORBIDDEN,
       "You don't have permission to delete this company."
     );
   }
@@ -6987,7 +7201,7 @@ var getMySubscription = async (userId) => {
   });
   if (!company) {
     throw new appError_default(
-      import_http_status_codes27.StatusCodes.NOT_FOUND,
+      import_http_status_codes28.StatusCodes.NOT_FOUND,
       "You don't have a registered company yet."
     );
   }
@@ -7007,7 +7221,7 @@ var getMySubscription = async (userId) => {
 var updateMySubscription = async (userId, plan) => {
   if (plan !== "FREE") {
     throw new appError_default(
-      import_http_status_codes27.StatusCodes.BAD_REQUEST,
+      import_http_status_codes28.StatusCodes.BAD_REQUEST,
       "Paid plans can only be activated through checkout."
     );
   }
@@ -7016,7 +7230,7 @@ var updateMySubscription = async (userId, plan) => {
   });
   if (!company) {
     throw new appError_default(
-      import_http_status_codes27.StatusCodes.NOT_FOUND,
+      import_http_status_codes28.StatusCodes.NOT_FOUND,
       "You don't have a registered company yet."
     );
   }
@@ -7040,19 +7254,19 @@ var cancelMySubscription = async (userId) => {
   });
   if (!company) {
     throw new appError_default(
-      import_http_status_codes27.StatusCodes.NOT_FOUND,
+      import_http_status_codes28.StatusCodes.NOT_FOUND,
       "You don't have a registered company yet."
     );
   }
   if (!company.subscription) {
     throw new appError_default(
-      import_http_status_codes27.StatusCodes.NOT_FOUND,
+      import_http_status_codes28.StatusCodes.NOT_FOUND,
       "No active subscription to cancel."
     );
   }
   if (company.subscription.status === "CANCELLED" || company.subscription.status === "EXPIRED") {
     throw new appError_default(
-      import_http_status_codes27.StatusCodes.CONFLICT,
+      import_http_status_codes28.StatusCodes.CONFLICT,
       "Subscription is already cancelled or expired."
     );
   }
@@ -7087,7 +7301,7 @@ var registerCompany2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.body
   );
-  res.status(import_http_status_codes28.StatusCodes.CREATED).json({
+  res.status(import_http_status_codes29.StatusCodes.CREATED).json({
     success: true,
     message: "Company registered successfully. Awaiting admin verification.",
     data: company
@@ -7099,7 +7313,7 @@ var getAllCompanies2 = catchAsync(async (req, res) => {
     req.query,
     requesterRole
   );
-  res.status(import_http_status_codes28.StatusCodes.OK).json({
+  res.status(import_http_status_codes29.StatusCodes.OK).json({
     success: true,
     message: "Companies retrieved successfully.",
     meta: result.meta,
@@ -7113,7 +7327,7 @@ var getCompanyById2 = catchAsync(async (req, res) => {
     requester?.id ?? "",
     requester?.role ?? "CANDIDATE"
   );
-  res.status(import_http_status_codes28.StatusCodes.OK).json({
+  res.status(import_http_status_codes29.StatusCodes.OK).json({
     success: true,
     message: "Company retrieved successfully.",
     data: company
@@ -7122,7 +7336,7 @@ var getCompanyById2 = catchAsync(async (req, res) => {
 var getMyCompany2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const company = await companyService.getMyCompany(currentUser.id);
-  res.status(import_http_status_codes28.StatusCodes.OK).json({
+  res.status(import_http_status_codes29.StatusCodes.OK).json({
     success: true,
     message: "Your company retrieved successfully.",
     data: company
@@ -7135,7 +7349,7 @@ var updateMyCompany2 = catchAsync(async (req, res) => {
     req.body,
     req.file
   );
-  res.status(import_http_status_codes28.StatusCodes.OK).json({
+  res.status(import_http_status_codes29.StatusCodes.OK).json({
     success: true,
     message: "Company updated successfully.",
     data: company
@@ -7144,7 +7358,7 @@ var updateMyCompany2 = catchAsync(async (req, res) => {
 var requestVerification2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const result = await companyService.requestVerification(currentUser.id);
-  res.status(import_http_status_codes28.StatusCodes.OK).json({
+  res.status(import_http_status_codes29.StatusCodes.OK).json({
     success: true,
     message: "Admins have been notified and will review your company.",
     data: result
@@ -7156,7 +7370,7 @@ var verifyCompany2 = catchAsync(async (req, res) => {
     req.params.id,
     currentUser.id
   );
-  res.status(import_http_status_codes28.StatusCodes.OK).json({
+  res.status(import_http_status_codes29.StatusCodes.OK).json({
     success: true,
     message: "Company verified successfully.",
     data: company
@@ -7169,7 +7383,7 @@ var deleteCompany = catchAsync(async (req, res) => {
     currentUser.id,
     currentUser.role
   );
-  res.status(import_http_status_codes28.StatusCodes.OK).json({
+  res.status(import_http_status_codes29.StatusCodes.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -7178,7 +7392,7 @@ var deleteCompany = catchAsync(async (req, res) => {
 var getMySubscription2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const subscription = await companyService.getMySubscription(currentUser.id);
-  res.status(import_http_status_codes28.StatusCodes.OK).json({
+  res.status(import_http_status_codes29.StatusCodes.OK).json({
     success: true,
     message: "Subscription retrieved successfully.",
     data: subscription
@@ -7190,7 +7404,7 @@ var updateMySubscription2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.body.plan
   );
-  res.status(import_http_status_codes28.StatusCodes.OK).json({
+  res.status(import_http_status_codes29.StatusCodes.OK).json({
     success: true,
     message: "Subscription updated successfully.",
     data: subscription
@@ -7201,7 +7415,7 @@ var cancelMySubscription2 = catchAsync(async (req, res) => {
   const subscription = await companyService.cancelMySubscription(
     currentUser.id
   );
-  res.status(import_http_status_codes28.StatusCodes.OK).json({
+  res.status(import_http_status_codes29.StatusCodes.OK).json({
     success: true,
     message: "Subscription cancelled successfully. It will remain active until the end of the current period.",
     data: subscription
@@ -7301,10 +7515,10 @@ var companyRoutes = router7;
 var import_express8 = require("express");
 
 // src/app/modules/consent/consent.controller.ts
-var import_http_status_codes30 = require("http-status-codes");
+var import_http_status_codes31 = require("http-status-codes");
 
 // src/app/modules/consent/consent.service.ts
-var import_http_status_codes29 = require("http-status-codes");
+var import_http_status_codes30 = require("http-status-codes");
 
 // src/app/modules/consent/consent.const.ts
 var CONSENT_SELECT = {
@@ -7315,22 +7529,25 @@ var CONSENT_SELECT = {
   grantedAt: true,
   revokedAt: true
 };
+var CONSENT_TYPE_LABELS = {
+  MARKETING: "Marketing communications",
+  ANALYTICS: "Analytics and performance tracking",
+  THIRD_PARTY: "Third-party data sharing",
+  AI_PROCESSING: "AI processing of my assessment answers",
+  PRIVACY_POLICY: "Privacy policy",
+  TERMS_OF_SERVICE: "Terms of service"
+};
 
 // src/app/modules/consent/consent.service.ts
+var ALL_CONSENT_TYPES = Object.keys(CONSENT_TYPE_LABELS);
+var isConsentType = (value) => ALL_CONSENT_TYPES.includes(value);
 var getMyConsents = async (userId) => {
   const consents = await prisma.userConsent.findMany({
     where: { userId },
     select: CONSENT_SELECT,
     orderBy: { grantedAt: "desc" }
   });
-  const allTypes = [
-    "MARKETING",
-    "ANALYTICS",
-    "THIRD_PARTY",
-    "PRIVACY_POLICY",
-    "TERMS_OF_SERVICE"
-  ];
-  const result = allTypes.map((type) => {
+  const result = ALL_CONSENT_TYPES.map((type) => {
     const existing = consents.find((c) => c.consentType === type);
     if (existing) {
       return existing;
@@ -7381,15 +7598,18 @@ var updateConsent = async (userId, payload) => {
   });
 };
 var revokeConsent = async (userId, consentType) => {
+  if (!isConsentType(consentType)) {
+    throw new appError_default(import_http_status_codes30.StatusCodes.BAD_REQUEST, "Unknown consent type.");
+  }
   const existing = await prisma.userConsent.findUnique({
     where: { userId_consentType: { userId, consentType } }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes29.StatusCodes.NOT_FOUND, "Consent not found.");
+    throw new appError_default(import_http_status_codes30.StatusCodes.NOT_FOUND, "Consent not found.");
   }
   if (!existing.granted) {
     throw new appError_default(
-      import_http_status_codes29.StatusCodes.CONFLICT,
+      import_http_status_codes30.StatusCodes.CONFLICT,
       "This consent is already revoked."
     );
   }
@@ -7409,7 +7629,7 @@ var consentService = {
 var getMyConsents2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const consents = await consentService.getMyConsents(currentUser.id);
-  res.status(import_http_status_codes30.StatusCodes.OK).json({
+  res.status(import_http_status_codes31.StatusCodes.OK).json({
     success: true,
     message: "Consents retrieved successfully.",
     data: consents
@@ -7418,7 +7638,7 @@ var getMyConsents2 = catchAsync(async (req, res) => {
 var updateConsent2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const consent = await consentService.updateConsent(currentUser.id, req.body);
-  res.status(import_http_status_codes30.StatusCodes.OK).json({
+  res.status(import_http_status_codes31.StatusCodes.OK).json({
     success: true,
     message: "Consent updated successfully.",
     data: consent
@@ -7430,7 +7650,7 @@ var revokeConsent2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.params.consentType
   );
-  res.status(import_http_status_codes30.StatusCodes.OK).json({
+  res.status(import_http_status_codes31.StatusCodes.OK).json({
     success: true,
     message: "Consent revoked successfully.",
     data: consent
@@ -7444,13 +7664,8 @@ var consentController = {
 
 // src/app/modules/consent/consent.validation.ts
 var import_zod9 = require("zod");
-var consentTypeSchema = import_zod9.z.enum([
-  "MARKETING",
-  "ANALYTICS",
-  "THIRD_PARTY",
-  "PRIVACY_POLICY",
-  "TERMS_OF_SERVICE"
-]);
+var consentTypes = Object.keys(CONSENT_TYPE_LABELS);
+var consentTypeSchema = import_zod9.z.enum(consentTypes);
 var updateConsentSchema = import_zod9.z.object({
   consentType: consentTypeSchema,
   granted: import_zod9.z.boolean()
@@ -7475,13 +7690,13 @@ var consentRoutes = router8;
 var import_express9 = require("express");
 
 // src/app/modules/evaluation/evaluation.controller.ts
-var import_http_status_codes32 = require("http-status-codes");
+var import_http_status_codes33 = require("http-status-codes");
 
 // src/app/modules/evaluation/evaluation.service.ts
-var import_http_status_codes31 = require("http-status-codes");
+var import_http_status_codes32 = require("http-status-codes");
 var assertCanGrade = (requesterCompanyId, submissionCompanyId, role) => {
   if (role !== "ADMIN" && requesterCompanyId !== submissionCompanyId) {
-    throw new appError_default(import_http_status_codes31.StatusCodes.NOT_FOUND, "Submission not found.");
+    throw new appError_default(import_http_status_codes32.StatusCodes.NOT_FOUND, "Submission not found.");
   }
 };
 var getSubmissionsForAttempt = async (attemptId, requester) => {
@@ -7490,7 +7705,7 @@ var getSubmissionsForAttempt = async (attemptId, requester) => {
     select: { id: true, assessment: { select: { companyId: true } } }
   });
   if (!attempt) {
-    throw new appError_default(import_http_status_codes31.StatusCodes.NOT_FOUND, "Attempt not found.");
+    throw new appError_default(import_http_status_codes32.StatusCodes.NOT_FOUND, "Attempt not found.");
   }
   assertCanGrade(
     requester.companyId,
@@ -7509,7 +7724,7 @@ var getSubmissionById = async (id, requester) => {
     select: SUBMISSION_GRADING_SELECT
   });
   if (!submission) {
-    throw new appError_default(import_http_status_codes31.StatusCodes.NOT_FOUND, "Submission not found.");
+    throw new appError_default(import_http_status_codes32.StatusCodes.NOT_FOUND, "Submission not found.");
   }
   const attempt = await prisma.assessmentAttempt.findUniqueOrThrow({
     where: { id: submission.attemptId },
@@ -7527,7 +7742,7 @@ var getPendingEvaluations = async (assessmentId, companyId) => {
     where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId)
   });
   if (!assessment) {
-    throw new appError_default(import_http_status_codes31.StatusCodes.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(import_http_status_codes32.StatusCodes.NOT_FOUND, "Assessment not found.");
   }
   return prisma.submission.findMany({
     where: { attempt: { assessmentId }, evaluation: { status: "PENDING" } },
@@ -7540,6 +7755,7 @@ var evaluateSubmission = async (id, evaluatorId, companyId, payload) => {
     where: { id },
     include: {
       problem: { select: { id: true, type: true, defaultMarks: true } },
+      evaluation: { select: { reviewStatus: true, aiScore: true } },
       attempt: {
         select: {
           id: true,
@@ -7555,7 +7771,7 @@ var evaluateSubmission = async (id, evaluatorId, companyId, payload) => {
     }
   });
   if (!submission) {
-    throw new appError_default(import_http_status_codes31.StatusCodes.NOT_FOUND, "Submission not found.");
+    throw new appError_default(import_http_status_codes32.StatusCodes.NOT_FOUND, "Submission not found.");
   }
   assertCanGrade(
     companyId,
@@ -7564,13 +7780,13 @@ var evaluateSubmission = async (id, evaluatorId, companyId, payload) => {
   );
   if (submission.attempt.status === "NOT_STARTED" || submission.attempt.status === "IN_PROGRESS") {
     throw new appError_default(
-      import_http_status_codes31.StatusCodes.CONFLICT,
+      import_http_status_codes32.StatusCodes.CONFLICT,
       "This attempt hasn't been submitted yet."
     );
   }
   if (submission.problem.type === "MCQ") {
     throw new appError_default(
-      import_http_status_codes31.StatusCodes.BAD_REQUEST,
+      import_http_status_codes32.StatusCodes.BAD_REQUEST,
       "MCQ submissions are graded automatically and cannot be manually re-graded."
     );
   }
@@ -7580,10 +7796,11 @@ var evaluateSubmission = async (id, evaluatorId, companyId, payload) => {
   const maxScore = assessmentProblem?.marks ?? submission.problem.defaultMarks;
   if (payload.score > maxScore) {
     throw new appError_default(
-      import_http_status_codes31.StatusCodes.BAD_REQUEST,
+      import_http_status_codes32.StatusCodes.BAD_REQUEST,
       `Score cannot exceed the maximum marks for this problem (${maxScore}).`
     );
   }
+  const reviewStatus = submission.evaluation?.reviewStatus === "PENDING_REVIEW" ? submission.evaluation.aiScore === payload.score ? "APPROVED" : "OVERRIDDEN" : void 0;
   await prisma.$transaction(async (tx) => {
     if (submission.problem.type === "CODING" && payload.testCaseResults) {
       for (const testCaseResult of payload.testCaseResults) {
@@ -7626,6 +7843,7 @@ var evaluateSubmission = async (id, evaluatorId, companyId, payload) => {
         isAutoEvaluated: false,
         evaluatorId,
         ...payload.feedback !== void 0 && { feedback: payload.feedback },
+        ...reviewStatus && { reviewStatus, reviewedAt: /* @__PURE__ */ new Date() },
         evaluatedAt: /* @__PURE__ */ new Date()
       },
       create: {
@@ -7646,11 +7864,74 @@ var evaluateSubmission = async (id, evaluatorId, companyId, payload) => {
     select: SUBMISSION_GRADING_SELECT
   });
 };
+var approveAiSuggestion = async (id, evaluatorId, companyId) => {
+  const submission = await prisma.submission.findUnique({
+    where: { id },
+    include: {
+      evaluation: true,
+      attempt: {
+        select: {
+          id: true,
+          status: true,
+          assessment: { select: { companyId: true } }
+        }
+      }
+    }
+  });
+  if (!submission) {
+    throw new appError_default(import_http_status_codes32.StatusCodes.NOT_FOUND, "Submission not found.");
+  }
+  assertCanGrade(
+    companyId,
+    submission.attempt.assessment.companyId,
+    "RECRUITER"
+  );
+  const evaluation = submission.evaluation;
+  if (!evaluation || evaluation.reviewStatus !== "PENDING_REVIEW" || evaluation.aiScore === null) {
+    throw new appError_default(
+      import_http_status_codes32.StatusCodes.CONFLICT,
+      "There is no AI suggestion waiting for review on this submission."
+    );
+  }
+  if (evaluation.status === "COMPLETED") {
+    throw new appError_default(
+      import_http_status_codes32.StatusCodes.CONFLICT,
+      "This submission has already been graded."
+    );
+  }
+  const aiScore = evaluation.aiScore;
+  const aiFeedback = evaluation.aiFeedback;
+  await prisma.$transaction([
+    prisma.submission.update({
+      where: { id },
+      data: { status: "EVALUATED" }
+    }),
+    prisma.submissionEvaluation.update({
+      where: { submissionId: id },
+      data: {
+        score: aiScore,
+        ...aiFeedback !== null && { feedback: aiFeedback },
+        status: "COMPLETED",
+        isAutoEvaluated: false,
+        evaluatorId,
+        reviewStatus: "APPROVED",
+        reviewedAt: /* @__PURE__ */ new Date(),
+        evaluatedAt: /* @__PURE__ */ new Date()
+      }
+    })
+  ]);
+  await recomputeResult(submission.attempt.id);
+  return prisma.submission.findUniqueOrThrow({
+    where: { id },
+    select: SUBMISSION_GRADING_SELECT
+  });
+};
 var evaluationService = {
   getSubmissionsForAttempt,
   getSubmissionById,
   getPendingEvaluations,
-  evaluateSubmission
+  evaluateSubmission,
+  approveAiSuggestion
 };
 
 // src/app/modules/evaluation/evaluation.controller.ts
@@ -7666,7 +7947,7 @@ var getSubmissionsForAttempt2 = catchAsync(
         ...companyId !== void 0 && { companyId }
       }
     );
-    res.status(import_http_status_codes32.StatusCodes.OK).json({
+    res.status(import_http_status_codes33.StatusCodes.OK).json({
       success: true,
       message: "Submissions retrieved successfully.",
       data: submissions
@@ -7684,7 +7965,7 @@ var getSubmissionById2 = catchAsync(async (req, res) => {
       ...companyId !== void 0 && { companyId }
     }
   );
-  res.status(import_http_status_codes32.StatusCodes.OK).json({
+  res.status(import_http_status_codes33.StatusCodes.OK).json({
     success: true,
     message: "Submission retrieved successfully.",
     data: submission
@@ -7698,7 +7979,7 @@ var getPendingEvaluations2 = catchAsync(
       req.params.assessmentId,
       companyId
     );
-    res.status(import_http_status_codes32.StatusCodes.OK).json({
+    res.status(import_http_status_codes33.StatusCodes.OK).json({
       success: true,
       message: "Pending evaluations retrieved successfully.",
       data: submissions
@@ -7714,9 +7995,23 @@ var evaluateSubmission2 = catchAsync(async (req, res) => {
     companyId,
     req.body
   );
-  res.status(import_http_status_codes32.StatusCodes.OK).json({
+  res.status(import_http_status_codes33.StatusCodes.OK).json({
     success: true,
     message: "Submission evaluated successfully.",
+    data: submission
+  });
+});
+var approveAiSuggestion2 = catchAsync(async (req, res) => {
+  const currentUser = req.user;
+  const companyId = await getCompanyIdForUser(currentUser, req);
+  const submission = await evaluationService.approveAiSuggestion(
+    req.params.id,
+    currentUser.id,
+    companyId
+  );
+  res.status(import_http_status_codes33.StatusCodes.OK).json({
+    success: true,
+    message: "AI suggestion approved.",
     data: submission
   });
 });
@@ -7724,7 +8019,8 @@ var evaluationController = {
   getSubmissionsForAttempt: getSubmissionsForAttempt2,
   getSubmissionById: getSubmissionById2,
   getPendingEvaluations: getPendingEvaluations2,
-  evaluateSubmission: evaluateSubmission2
+  evaluateSubmission: evaluateSubmission2,
+  approveAiSuggestion: approveAiSuggestion2
 };
 
 // src/app/modules/evaluation/evaluation.validation.ts
@@ -7761,17 +8057,21 @@ router9.patch(
   validateRequest(evaluationValidation.manualEvaluationSchema),
   evaluationController.evaluateSubmission
 );
+router9.post(
+  "/submissions/:id/approve-ai",
+  evaluationController.approveAiSuggestion
+);
 var evaluationRoutes = router9;
 
 // src/app/modules/invitation/invitation.routes.ts
 var import_express10 = require("express");
 
 // src/app/modules/invitation/invitation.controller.ts
-var import_http_status_codes34 = require("http-status-codes");
+var import_http_status_codes35 = require("http-status-codes");
 
 // src/app/modules/invitation/invitation.service.ts
-var import_node_crypto3 = require("crypto");
-var import_http_status_codes33 = require("http-status-codes");
+var import_node_crypto4 = require("crypto");
+var import_http_status_codes34 = require("http-status-codes");
 
 // src/lib/resend.ts
 var import_resend = require("resend");
@@ -7830,7 +8130,7 @@ var INVITATION_SELECT = {
 };
 
 // src/app/modules/invitation/invitation.service.ts
-var generateInvitationToken = () => (0, import_node_crypto3.createHash)("sha256").update((0, import_node_crypto3.randomUUID)()).digest("hex");
+var generateInvitationToken = () => (0, import_node_crypto4.createHash)("sha256").update((0, import_node_crypto4.randomUUID)()).digest("hex");
 var invitationEmailTemplate = (assessmentTitle, expiresAt) => `
 	<div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; color: #111;">
 		<h2>You've been invited to an assessment</h2>
@@ -7887,11 +8187,11 @@ var inviteCandidates = async (assessmentId, companyId, payload) => {
     where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId) ?? {}
   });
   if (!assessment) {
-    throw new appError_default(import_http_status_codes33.StatusCodes.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(import_http_status_codes34.StatusCodes.NOT_FOUND, "Assessment not found.");
   }
   if (assessment.status !== "PUBLISHED" && assessment.status !== "ACTIVE") {
     throw new appError_default(
-      import_http_status_codes33.StatusCodes.CONFLICT,
+      import_http_status_codes34.StatusCodes.CONFLICT,
       "Candidates can only be invited to a published assessment."
     );
   }
@@ -7941,6 +8241,22 @@ var inviteCandidates = async (assessmentId, companyId, payload) => {
       })
     )
   );
+  await Promise.allSettled(
+    created.map(
+      (invitation) => automationService.emitEvent({
+        eventType: AUTOMATION_EVENT_TYPES.INVITATION_CREATED,
+        aggregateType: "AssessmentInvitation",
+        aggregateId: invitation.id,
+        dedupeKey: `${AUTOMATION_EVENT_TYPES.INVITATION_CREATED}:${invitation.id}`,
+        payload: {
+          invitationId: invitation.id,
+          assessmentId: invitation.assessmentId,
+          assessmentTitle: assessment.title,
+          expiresAt: expiresAt.toISOString()
+        }
+      })
+    )
+  );
   await notifyInvitedCandidates(
     created.flatMap(
       (invitation) => invitation.candidateId ? [
@@ -7971,7 +8287,7 @@ var inviteCandidates = async (assessmentId, companyId, payload) => {
 var getInvitationsForAssessment = async (assessmentId, companyId, query) => {
   if (!companyId) {
     throw new appError_default(
-      import_http_status_codes33.StatusCodes.FORBIDDEN,
+      import_http_status_codes34.StatusCodes.FORBIDDEN,
       "Recruiter scope could not be resolved."
     );
   }
@@ -7979,7 +8295,7 @@ var getInvitationsForAssessment = async (assessmentId, companyId, query) => {
     where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId) ?? {}
   });
   if (!assessment) {
-    throw new appError_default(import_http_status_codes33.StatusCodes.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(import_http_status_codes34.StatusCodes.NOT_FOUND, "Assessment not found.");
   }
   return invitationQueryBuilder.execute(query, { assessmentId });
 };
@@ -8021,12 +8337,12 @@ var getInvitationById = async (id, requester) => {
     select: INVITATION_SELECT
   });
   if (!invitation) {
-    throw new appError_default(import_http_status_codes33.StatusCodes.NOT_FOUND, "Invitation not found.");
+    throw new appError_default(import_http_status_codes34.StatusCodes.NOT_FOUND, "Invitation not found.");
   }
   const isInvitedCandidate = invitation.candidateId === requester.id || invitation.email.toLowerCase() === requester.email.toLowerCase();
   const isOwningRecruiter = requester.companyId !== void 0 && invitation.assessment.companyId === requester.companyId;
   if (requester.role !== "ADMIN" && !isInvitedCandidate && !isOwningRecruiter) {
-    throw new appError_default(import_http_status_codes33.StatusCodes.NOT_FOUND, "Invitation not found.");
+    throw new appError_default(import_http_status_codes34.StatusCodes.NOT_FOUND, "Invitation not found.");
   }
   return invitation;
 };
@@ -8036,12 +8352,12 @@ var acceptInvitation = async (id, userId, email) => {
     include: { assessment: true }
   });
   if (!invitation) {
-    throw new appError_default(import_http_status_codes33.StatusCodes.NOT_FOUND, "Invitation not found.");
+    throw new appError_default(import_http_status_codes34.StatusCodes.NOT_FOUND, "Invitation not found.");
   }
   const belongsToUser = invitation.candidateId === userId || invitation.email.toLowerCase() === email.toLowerCase();
   if (!belongsToUser) {
     throw new appError_default(
-      import_http_status_codes33.StatusCodes.FORBIDDEN,
+      import_http_status_codes34.StatusCodes.FORBIDDEN,
       "This invitation does not belong to your account."
     );
   }
@@ -8050,17 +8366,17 @@ var acceptInvitation = async (id, userId, email) => {
       where: { id },
       data: { status: "EXPIRED" }
     });
-    throw new appError_default(import_http_status_codes33.StatusCodes.GONE, "This invitation has expired.");
+    throw new appError_default(import_http_status_codes34.StatusCodes.GONE, "This invitation has expired.");
   }
   if (invitation.status !== "PENDING") {
     throw new appError_default(
-      import_http_status_codes33.StatusCodes.CONFLICT,
+      import_http_status_codes34.StatusCodes.CONFLICT,
       `This invitation is already ${invitation.status.toLowerCase()}.`
     );
   }
   if (invitation.assessment.status !== "PUBLISHED" && invitation.assessment.status !== "ACTIVE") {
     throw new appError_default(
-      import_http_status_codes33.StatusCodes.CONFLICT,
+      import_http_status_codes34.StatusCodes.CONFLICT,
       "This assessment is no longer accepting candidates."
     );
   }
@@ -8075,18 +8391,18 @@ var declineInvitation = async (id, userId, email) => {
     where: { id }
   });
   if (!invitation) {
-    throw new appError_default(import_http_status_codes33.StatusCodes.NOT_FOUND, "Invitation not found.");
+    throw new appError_default(import_http_status_codes34.StatusCodes.NOT_FOUND, "Invitation not found.");
   }
   const belongsToUser = invitation.candidateId === userId || invitation.email.toLowerCase() === email.toLowerCase();
   if (!belongsToUser) {
     throw new appError_default(
-      import_http_status_codes33.StatusCodes.FORBIDDEN,
+      import_http_status_codes34.StatusCodes.FORBIDDEN,
       "This invitation does not belong to your account."
     );
   }
   if (invitation.status !== "PENDING") {
     throw new appError_default(
-      import_http_status_codes33.StatusCodes.CONFLICT,
+      import_http_status_codes34.StatusCodes.CONFLICT,
       `This invitation is already ${invitation.status.toLowerCase()}.`
     );
   }
@@ -8105,11 +8421,11 @@ var cancelInvitation = async (id, companyId) => {
     include: { assessment: true }
   });
   if (!invitation) {
-    throw new appError_default(import_http_status_codes33.StatusCodes.NOT_FOUND, "Invitation not found.");
+    throw new appError_default(import_http_status_codes34.StatusCodes.NOT_FOUND, "Invitation not found.");
   }
   if (invitation.status !== "PENDING") {
     throw new appError_default(
-      import_http_status_codes33.StatusCodes.CONFLICT,
+      import_http_status_codes34.StatusCodes.CONFLICT,
       "Only a pending invitation can be cancelled."
     );
   }
@@ -8135,7 +8451,7 @@ var inviteCandidates2 = catchAsync(async (req, res) => {
     companyId,
     req.body
   );
-  res.status(import_http_status_codes34.StatusCodes.CREATED).json({
+  res.status(import_http_status_codes35.StatusCodes.CREATED).json({
     success: true,
     message: `${result.invited} candidate(s) invited${result.skipped ? `, ${result.skipped} already invited` : ""}.`,
     data: result
@@ -8150,7 +8466,7 @@ var getInvitationsForAssessment2 = catchAsync(
       companyId,
       req.query
     );
-    res.status(import_http_status_codes34.StatusCodes.OK).json({
+    res.status(import_http_status_codes35.StatusCodes.OK).json({
       success: true,
       message: "Invitations retrieved successfully.",
       meta: result.meta,
@@ -8164,7 +8480,7 @@ var getMyInvitations2 = catchAsync(async (req, res) => {
     currentUser.id,
     currentUser.email
   );
-  res.status(import_http_status_codes34.StatusCodes.OK).json({
+  res.status(import_http_status_codes35.StatusCodes.OK).json({
     success: true,
     message: "Invitations retrieved successfully.",
     data: invitations
@@ -8182,7 +8498,7 @@ var getInvitationById2 = catchAsync(async (req, res) => {
       ...companyId !== void 0 && { companyId }
     }
   );
-  res.status(import_http_status_codes34.StatusCodes.OK).json({
+  res.status(import_http_status_codes35.StatusCodes.OK).json({
     success: true,
     message: "Invitation retrieved successfully.",
     data: invitation
@@ -8195,7 +8511,7 @@ var acceptInvitation2 = catchAsync(async (req, res) => {
     currentUser.id,
     currentUser.email
   );
-  res.status(import_http_status_codes34.StatusCodes.OK).json({
+  res.status(import_http_status_codes35.StatusCodes.OK).json({
     success: true,
     message: "Invitation accepted successfully.",
     data: invitation
@@ -8208,7 +8524,7 @@ var declineInvitation2 = catchAsync(async (req, res) => {
     currentUser.id,
     currentUser.email
   );
-  res.status(import_http_status_codes34.StatusCodes.OK).json({
+  res.status(import_http_status_codes35.StatusCodes.OK).json({
     success: true,
     message: "Invitation declined.",
     data: invitation
@@ -8221,7 +8537,7 @@ var cancelInvitation2 = catchAsync(async (req, res) => {
     req.params.id,
     companyId
   );
-  res.status(import_http_status_codes34.StatusCodes.OK).json({
+  res.status(import_http_status_codes35.StatusCodes.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -8291,10 +8607,10 @@ var invitationRoutes = router10;
 var import_express11 = require("express");
 
 // src/app/modules/notification/notification.controller.ts
-var import_http_status_codes36 = require("http-status-codes");
+var import_http_status_codes37 = require("http-status-codes");
 
 // src/app/modules/notification/notification.service.ts
-var import_http_status_codes35 = require("http-status-codes");
+var import_http_status_codes36 = require("http-status-codes");
 
 // src/app/modules/notification/notification.const.ts
 var NOTIFICATION_SELECT = {
@@ -8322,7 +8638,9 @@ var notificationQueryBuilder = new QueryBuilder(prisma.notification, {
         ATTEMPT_EVALUATED: "ATTEMPT_EVALUATED",
         PAYMENT_SUCCESS: "PAYMENT_SUCCESS",
         PAYMENT_FAILED: "PAYMENT_FAILED",
-        SYSTEM: "SYSTEM"
+        SYSTEM: "SYSTEM",
+        PROCTORING_ALERT: "PROCTORING_ALERT",
+        EVALUATION_REVIEW_NEEDED: "EVALUATION_REVIEW_NEEDED"
       }
     },
     createdAt: "date"
@@ -8346,7 +8664,7 @@ var markAsRead = async (id, userId) => {
     where: { id, userId }
   });
   if (!notification) {
-    throw new appError_default(import_http_status_codes35.StatusCodes.NOT_FOUND, "Notification not found.");
+    throw new appError_default(import_http_status_codes36.StatusCodes.NOT_FOUND, "Notification not found.");
   }
   return prisma.notification.update({
     where: { id },
@@ -8366,7 +8684,7 @@ var deleteNotification = async (id, userId) => {
     where: { id, userId }
   });
   if (!notification) {
-    throw new appError_default(import_http_status_codes35.StatusCodes.NOT_FOUND, "Notification not found.");
+    throw new appError_default(import_http_status_codes36.StatusCodes.NOT_FOUND, "Notification not found.");
   }
   await prisma.notification.delete({ where: { id } });
   return { message: "Notification deleted successfully." };
@@ -8386,7 +8704,7 @@ var getMyNotifications2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.query
   );
-  res.status(import_http_status_codes36.StatusCodes.OK).json({
+  res.status(import_http_status_codes37.StatusCodes.OK).json({
     success: true,
     message: "Notifications retrieved successfully.",
     meta: result.meta,
@@ -8396,7 +8714,7 @@ var getMyNotifications2 = catchAsync(async (req, res) => {
 var getUnreadCount2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const result = await notificationService.getUnreadCount(currentUser.id);
-  res.status(import_http_status_codes36.StatusCodes.OK).json({
+  res.status(import_http_status_codes37.StatusCodes.OK).json({
     success: true,
     message: "Unread count retrieved successfully.",
     data: result
@@ -8408,7 +8726,7 @@ var markAsRead2 = catchAsync(async (req, res) => {
     req.params.id,
     currentUser.id
   );
-  res.status(import_http_status_codes36.StatusCodes.OK).json({
+  res.status(import_http_status_codes37.StatusCodes.OK).json({
     success: true,
     message: "Notification marked as read.",
     data: notification
@@ -8417,7 +8735,7 @@ var markAsRead2 = catchAsync(async (req, res) => {
 var markAllAsRead2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const result = await notificationService.markAllAsRead(currentUser.id);
-  res.status(import_http_status_codes36.StatusCodes.OK).json({
+  res.status(import_http_status_codes37.StatusCodes.OK).json({
     success: true,
     message: `${result.updated} notification(s) marked as read.`,
     data: result
@@ -8429,7 +8747,7 @@ var deleteNotification2 = catchAsync(async (req, res) => {
     req.params.id,
     currentUser.id
   );
-  res.status(import_http_status_codes36.StatusCodes.OK).json({
+  res.status(import_http_status_codes37.StatusCodes.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -8457,7 +8775,7 @@ var notificationRoutes = router11;
 var import_express12 = require("express");
 
 // src/app/modules/payment/payment.controller.ts
-var import_http_status_codes37 = require("http-status-codes");
+var import_http_status_codes38 = require("http-status-codes");
 var createCheckoutSession2 = catchAsync(
   async (req, res) => {
     const currentUser = req.user;
@@ -8467,7 +8785,7 @@ var createCheckoutSession2 = catchAsync(
       company.id,
       req.body
     );
-    res.status(import_http_status_codes37.StatusCodes.CREATED).json({
+    res.status(import_http_status_codes38.StatusCodes.CREATED).json({
       success: true,
       message: "Checkout session created.",
       data: result
@@ -8480,7 +8798,7 @@ var getMyPayments2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.query
   );
-  res.status(import_http_status_codes37.StatusCodes.OK).json({
+  res.status(import_http_status_codes38.StatusCodes.OK).json({
     success: true,
     message: "Payments retrieved successfully.",
     meta: result.meta,
@@ -8491,7 +8809,7 @@ var getAllPayments2 = catchAsync(async (req, res) => {
   const result = await paymentService.getAllPayments(
     req.query
   );
-  res.status(import_http_status_codes37.StatusCodes.OK).json({
+  res.status(import_http_status_codes38.StatusCodes.OK).json({
     success: true,
     message: "Payments retrieved successfully.",
     meta: result.meta,
@@ -8504,7 +8822,7 @@ var getPaymentById2 = catchAsync(async (req, res) => {
     id: currentUser.id,
     role: currentUser.role
   });
-  res.status(import_http_status_codes37.StatusCodes.OK).json({
+  res.status(import_http_status_codes38.StatusCodes.OK).json({
     success: true,
     message: "Payment retrieved successfully.",
     data: payment
@@ -8516,7 +8834,7 @@ var syncPayment2 = catchAsync(async (req, res) => {
     id: currentUser.id,
     role: currentUser.role
   });
-  res.status(import_http_status_codes37.StatusCodes.OK).json({
+  res.status(import_http_status_codes38.StatusCodes.OK).json({
     success: true,
     message: "Payment status refreshed.",
     data: payment
@@ -8566,10 +8884,10 @@ var paymentRoutes = router12;
 var import_express13 = require("express");
 
 // src/app/modules/problem/problem.controller.ts
-var import_http_status_codes39 = require("http-status-codes");
+var import_http_status_codes40 = require("http-status-codes");
 
 // src/app/modules/problem/problem.service.ts
-var import_http_status_codes38 = require("http-status-codes");
+var import_http_status_codes39 = require("http-status-codes");
 
 // src/app/modules/problem/problem.const.ts
 var PROBLEM_DETAIL_SELECT = {
@@ -8577,6 +8895,7 @@ var PROBLEM_DETAIL_SELECT = {
   title: true,
   slug: true,
   description: true,
+  rubric: true,
   type: true,
   difficulty: true,
   defaultMarks: true,
@@ -8697,7 +9016,11 @@ var createProblem = async (companyId, createdById, payload) => {
     });
   }
   return prisma.problem.create({
-    data: { ...baseData, type: "WRITTEN" },
+    data: {
+      ...baseData,
+      type: "WRITTEN",
+      ...payload.rubric !== void 0 && { rubric: payload.rubric }
+    },
     select: PROBLEM_DETAIL_SELECT
   });
 };
@@ -8712,7 +9035,7 @@ var getProblemById = async (id, companyId) => {
     select: PROBLEM_DETAIL_SELECT
   });
   if (!problem) {
-    throw new appError_default(import_http_status_codes38.StatusCodes.NOT_FOUND, "Problem not found.");
+    throw new appError_default(import_http_status_codes39.StatusCodes.NOT_FOUND, "Problem not found.");
   }
   return problem;
 };
@@ -8722,7 +9045,13 @@ var updateProblem = async (id, companyId, payload) => {
     where: whereClause
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes38.StatusCodes.NOT_FOUND, "Problem not found.");
+    throw new appError_default(import_http_status_codes39.StatusCodes.NOT_FOUND, "Problem not found.");
+  }
+  if (payload.rubric !== void 0 && existing.type !== "WRITTEN") {
+    throw new appError_default(
+      import_http_status_codes39.StatusCodes.BAD_REQUEST,
+      "A rubric can only be set on a WRITTEN problem."
+    );
   }
   const { options, testCases, mcqType, explanation, ...topLevel } = payload;
   if (Object.keys(topLevel).length > 0) {
@@ -8767,7 +9096,7 @@ var updateProblem = async (id, companyId, payload) => {
     });
     if (hasGradedResult) {
       throw new appError_default(
-        import_http_status_codes38.StatusCodes.CONFLICT,
+        import_http_status_codes39.StatusCodes.CONFLICT,
         "This problem's test cases can't be changed after candidates have been graded against them. Create a new problem instead."
       );
     }
@@ -8784,7 +9113,7 @@ var softDeleteProblem = async (id, companyId) => {
     where: whereClause
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes38.StatusCodes.NOT_FOUND, "Problem not found.");
+    throw new appError_default(import_http_status_codes39.StatusCodes.NOT_FOUND, "Problem not found.");
   }
   const usedInLiveAssessment = await prisma.assessmentProblem.findFirst({
     where: {
@@ -8794,7 +9123,7 @@ var softDeleteProblem = async (id, companyId) => {
   });
   if (usedInLiveAssessment) {
     throw new appError_default(
-      import_http_status_codes38.StatusCodes.CONFLICT,
+      import_http_status_codes39.StatusCodes.CONFLICT,
       "This problem is part of a published assessment and can't be deleted. Remove it from the assessment first."
     );
   }
@@ -8821,7 +9150,7 @@ var createProblem2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.body
   );
-  res.status(import_http_status_codes39.StatusCodes.CREATED).json({
+  res.status(import_http_status_codes40.StatusCodes.CREATED).json({
     success: true,
     message: "Problem created successfully.",
     data: problem
@@ -8834,7 +9163,7 @@ var getAllProblems2 = catchAsync(async (req, res) => {
     req.query,
     companyId
   );
-  res.status(import_http_status_codes39.StatusCodes.OK).json({
+  res.status(import_http_status_codes40.StatusCodes.OK).json({
     success: true,
     message: "Problems retrieved successfully.",
     meta: result.meta,
@@ -8848,7 +9177,7 @@ var getProblemById2 = catchAsync(async (req, res) => {
     req.params.id,
     companyId
   );
-  res.status(import_http_status_codes39.StatusCodes.OK).json({
+  res.status(import_http_status_codes40.StatusCodes.OK).json({
     success: true,
     message: "Problem retrieved successfully.",
     data: problem
@@ -8862,7 +9191,7 @@ var updateProblem2 = catchAsync(async (req, res) => {
     companyId,
     req.body
   );
-  res.status(import_http_status_codes39.StatusCodes.OK).json({
+  res.status(import_http_status_codes40.StatusCodes.OK).json({
     success: true,
     message: "Problem updated successfully.",
     data: problem
@@ -8875,7 +9204,7 @@ var deleteProblem = catchAsync(async (req, res) => {
     req.params.id,
     companyId
   );
-  res.status(import_http_status_codes39.StatusCodes.OK).json({
+  res.status(import_http_status_codes40.StatusCodes.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -8926,7 +9255,8 @@ var codingCreateSchema = import_zod13.z.object({
 });
 var writtenCreateSchema = import_zod13.z.object({
   ...baseFields,
-  type: import_zod13.z.literal("WRITTEN")
+  type: import_zod13.z.literal("WRITTEN"),
+  rubric: import_zod13.z.string().trim().min(10).max(5e3).optional()
 });
 var createProblemSchema = import_zod13.z.discriminatedUnion("type", [
   mcqCreateSchema,
@@ -8963,6 +9293,7 @@ var createProblemSchema = import_zod13.z.discriminatedUnion("type", [
 var updateProblemSchema = import_zod13.z.object({
   title: import_zod13.z.string().trim().min(3).max(200).optional(),
   description: import_zod13.z.string().trim().min(10).max(1e4).optional(),
+  rubric: import_zod13.z.string().trim().min(10).max(5e3).optional(),
   difficulty: import_zod13.z.enum(["EASY", "MEDIUM", "HARD"]).optional(),
   defaultMarks: import_zod13.z.coerce.number().int().min(1).max(1e3).optional(),
   isPublic: import_zod13.z.boolean().optional(),
@@ -9030,10 +9361,10 @@ var problemRoutes = router13;
 var import_express14 = require("express");
 
 // src/app/modules/result/result.controller.ts
-var import_http_status_codes41 = require("http-status-codes");
+var import_http_status_codes42 = require("http-status-codes");
 
 // src/app/modules/result/result.service.ts
-var import_http_status_codes40 = require("http-status-codes");
+var import_http_status_codes41 = require("http-status-codes");
 
 // src/app/modules/result/result.const.ts
 var RESULT_LEADERBOARD_SELECT = {
@@ -9065,7 +9396,7 @@ var getResultByAttemptId = async (attemptId, requester) => {
   } else if (requester.role !== "ADMIN") {
     if (!requester.companyId) {
       throw new appError_default(
-        import_http_status_codes40.StatusCodes.FORBIDDEN,
+        import_http_status_codes41.StatusCodes.FORBIDDEN,
         "Access denied. Missing company scope."
       );
     }
@@ -9079,11 +9410,11 @@ var getResultByAttemptId = async (attemptId, requester) => {
     }
   });
   if (!attempt) {
-    throw new appError_default(import_http_status_codes40.StatusCodes.NOT_FOUND, "Attempt result not found.");
+    throw new appError_default(import_http_status_codes41.StatusCodes.NOT_FOUND, "Attempt result not found.");
   }
   if (requester.role === "CANDIDATE" && !isResultReleasedToCandidate(attempt.assessment)) {
     throw new appError_default(
-      import_http_status_codes40.StatusCodes.FORBIDDEN,
+      import_http_status_codes41.StatusCodes.FORBIDDEN,
       "Results for this assessment haven't been released yet."
     );
   }
@@ -9093,7 +9424,7 @@ var getResultByAttemptId = async (attemptId, requester) => {
   });
   if (!result) {
     throw new appError_default(
-      import_http_status_codes40.StatusCodes.NOT_FOUND,
+      import_http_status_codes41.StatusCodes.NOT_FOUND,
       "Result not available yet \u2014 this attempt may not be finalized."
     );
   }
@@ -9104,7 +9435,7 @@ var getResultsForAssessment = async (assessmentId, companyId) => {
     where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId)
   });
   if (!assessment) {
-    throw new appError_default(import_http_status_codes40.StatusCodes.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(import_http_status_codes41.StatusCodes.NOT_FOUND, "Assessment not found.");
   }
   return prisma.result.findMany({
     where: { assessmentId },
@@ -9123,17 +9454,17 @@ var releaseResults = async (assessmentId, companyId, actorId) => {
     }
   });
   if (!assessment) {
-    throw new appError_default(import_http_status_codes40.StatusCodes.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(import_http_status_codes41.StatusCodes.NOT_FOUND, "Assessment not found.");
   }
   if (assessment.status === "DRAFT") {
     throw new appError_default(
-      import_http_status_codes40.StatusCodes.CONFLICT,
+      import_http_status_codes41.StatusCodes.CONFLICT,
       "Publish this assessment before releasing results."
     );
   }
   if (isResultReleasedToCandidate(assessment)) {
     throw new appError_default(
-      import_http_status_codes40.StatusCodes.CONFLICT,
+      import_http_status_codes41.StatusCodes.CONFLICT,
       "Results are already released to candidates."
     );
   }
@@ -9172,7 +9503,7 @@ var computeRanks = async (assessmentId, companyId) => {
     where: withTenantScope({ id: assessmentId, deletedAt: null }, companyId)
   });
   if (!assessment) {
-    throw new appError_default(import_http_status_codes40.StatusCodes.NOT_FOUND, "Assessment not found.");
+    throw new appError_default(import_http_status_codes41.StatusCodes.NOT_FOUND, "Assessment not found.");
   }
   const finalizedResults = await prisma.result.findMany({
     where: {
@@ -9188,7 +9519,7 @@ var computeRanks = async (assessmentId, companyId) => {
   });
   if (finalizedResults.length === 0) {
     throw new appError_default(
-      import_http_status_codes40.StatusCodes.BAD_REQUEST,
+      import_http_status_codes41.StatusCodes.BAD_REQUEST,
       "No fully-graded results to rank yet."
     );
   }
@@ -9234,7 +9565,7 @@ var getResultByAttemptId2 = catchAsync(async (req, res) => {
       ...companyId !== void 0 && { companyId }
     }
   );
-  res.status(import_http_status_codes41.StatusCodes.OK).json({
+  res.status(import_http_status_codes42.StatusCodes.OK).json({
     success: true,
     message: "Result retrieved successfully.",
     data: result
@@ -9248,7 +9579,7 @@ var getResultsForAssessment2 = catchAsync(
       req.params.assessmentId,
       companyId
     );
-    res.status(import_http_status_codes41.StatusCodes.OK).json({
+    res.status(import_http_status_codes42.StatusCodes.OK).json({
       success: true,
       message: "Results retrieved successfully.",
       data: results
@@ -9263,7 +9594,7 @@ var releaseResults2 = catchAsync(async (req, res) => {
     companyId,
     currentUser.id
   );
-  res.status(import_http_status_codes41.StatusCodes.OK).json({
+  res.status(import_http_status_codes42.StatusCodes.OK).json({
     success: true,
     message: "Results released to candidates.",
     data: result
@@ -9276,7 +9607,7 @@ var computeRanks2 = catchAsync(async (req, res) => {
     req.params.assessmentId,
     companyId
   );
-  res.status(import_http_status_codes41.StatusCodes.OK).json({
+  res.status(import_http_status_codes42.StatusCodes.OK).json({
     success: true,
     message: `Ranked ${result.ranked} result(s).`,
     data: result
@@ -9314,10 +9645,10 @@ var resultRoutes = router14;
 var import_express15 = require("express");
 
 // src/app/modules/user/account.controller.ts
-var import_http_status_codes43 = require("http-status-codes");
+var import_http_status_codes44 = require("http-status-codes");
 
 // src/app/modules/user/account.service.ts
-var import_http_status_codes42 = require("http-status-codes");
+var import_http_status_codes43 = require("http-status-codes");
 var exportMyData = async (userId) => {
   const user = await prisma.user.findFirst({
     where: { id: userId, deletedAt: null },
@@ -9338,7 +9669,7 @@ var exportMyData = async (userId) => {
     }
   });
   if (!user) {
-    throw new appError_default(import_http_status_codes42.StatusCodes.NOT_FOUND, "User not found.");
+    throw new appError_default(import_http_status_codes43.StatusCodes.NOT_FOUND, "User not found.");
   }
   const [
     candidateProfile,
@@ -9512,23 +9843,23 @@ var deleteMyAccount = async (userId, confirmEmail) => {
     select: { id: true, email: true, role: true }
   });
   if (!user) {
-    throw new appError_default(import_http_status_codes42.StatusCodes.NOT_FOUND, "User not found.");
+    throw new appError_default(import_http_status_codes43.StatusCodes.NOT_FOUND, "User not found.");
   }
   if (user.role === "ADMIN") {
     throw new appError_default(
-      import_http_status_codes42.StatusCodes.FORBIDDEN,
+      import_http_status_codes43.StatusCodes.FORBIDDEN,
       "Admin accounts can't be deleted from here."
     );
   }
   if (user.role === "RECRUITER") {
     throw new appError_default(
-      import_http_status_codes42.StatusCodes.CONFLICT,
+      import_http_status_codes43.StatusCodes.CONFLICT,
       "Company accounts can't be deleted from here yet. Please contact us and we will help."
     );
   }
   if (confirmEmail.trim().toLowerCase() !== user.email.toLowerCase()) {
     throw new appError_default(
-      import_http_status_codes42.StatusCodes.BAD_REQUEST,
+      import_http_status_codes43.StatusCodes.BAD_REQUEST,
       "The email you typed doesn't match your account email."
     );
   }
@@ -9541,7 +9872,7 @@ var deleteMyAccount = async (userId, confirmEmail) => {
   });
   if (inProgress > 0) {
     throw new appError_default(
-      import_http_status_codes42.StatusCodes.CONFLICT,
+      import_http_status_codes43.StatusCodes.CONFLICT,
       "You have an assessment in progress. Submit it before deleting your account."
     );
   }
@@ -9575,7 +9906,7 @@ var exportMyData2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const data = await accountService.exportMyData(currentUser.id);
   res.setHeader("Cache-Control", "no-store");
-  res.status(import_http_status_codes43.StatusCodes.OK).json({
+  res.status(import_http_status_codes44.StatusCodes.OK).json({
     success: true,
     message: "Your data export is ready.",
     data
@@ -9587,7 +9918,7 @@ var deleteMyAccount2 = catchAsync(async (req, res) => {
     currentUser.id,
     req.body.confirmEmail
   );
-  res.status(import_http_status_codes43.StatusCodes.OK).json({
+  res.status(import_http_status_codes44.StatusCodes.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -9603,10 +9934,10 @@ var deleteAccountSchema = import_zod14.z.object({
 var accountValidation = { deleteAccountSchema };
 
 // src/app/modules/user/user.controller.ts
-var import_http_status_codes45 = require("http-status-codes");
+var import_http_status_codes46 = require("http-status-codes");
 
 // src/app/modules/user/user.service.ts
-var import_http_status_codes44 = require("http-status-codes");
+var import_http_status_codes45 = require("http-status-codes");
 
 // src/app/modules/user/user.const.ts
 var USER_PUBLIC_SELECT = {
@@ -9653,7 +9984,7 @@ var userQueryBuilder = new QueryBuilder(prisma.user, {
 var assertNotActingOnSelf = (actorId, targetId, action) => {
   if (actorId === targetId) {
     throw new appError_default(
-      import_http_status_codes44.StatusCodes.FORBIDDEN,
+      import_http_status_codes45.StatusCodes.FORBIDDEN,
       `You cannot ${action} your own account.`
     );
   }
@@ -9670,7 +10001,7 @@ var getUserById = async (id) => {
     select: USER_PUBLIC_SELECT
   });
   if (!user) {
-    throw new appError_default(import_http_status_codes44.StatusCodes.NOT_FOUND, "User not found.");
+    throw new appError_default(import_http_status_codes45.StatusCodes.NOT_FOUND, "User not found.");
   }
   return user;
 };
@@ -9682,7 +10013,7 @@ var updateProfile = async (id, payload, file) => {
     }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes44.StatusCodes.NOT_FOUND, "User not found.");
+    throw new appError_default(import_http_status_codes45.StatusCodes.NOT_FOUND, "User not found.");
   }
   const updateData = {
     ...payload
@@ -9713,11 +10044,11 @@ var updateRole = async (id, role, actorId, actorRole) => {
     }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes44.StatusCodes.NOT_FOUND, "User not found.");
+    throw new appError_default(import_http_status_codes45.StatusCodes.NOT_FOUND, "User not found.");
   }
   if ((role === "ADMIN" || existing.role === "ADMIN") && actorRole !== "ADMIN") {
     throw new appError_default(
-      import_http_status_codes44.StatusCodes.FORBIDDEN,
+      import_http_status_codes45.StatusCodes.FORBIDDEN,
       "Only an Admin can assign or modify Admin privileges."
     );
   }
@@ -9746,7 +10077,7 @@ var updateStatus = async (id, status, actorId) => {
     }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes44.StatusCodes.NOT_FOUND, "User not found.");
+    throw new appError_default(import_http_status_codes45.StatusCodes.NOT_FOUND, "User not found.");
   }
   const updatedUser = await prisma.user.update({
     where: {
@@ -9776,7 +10107,7 @@ var softDeleteUser = async (id, actorId) => {
     }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes44.StatusCodes.NOT_FOUND, "User not found.");
+    throw new appError_default(import_http_status_codes45.StatusCodes.NOT_FOUND, "User not found.");
   }
   await prisma.user.update({
     where: {
@@ -9806,7 +10137,7 @@ var getAllUsers2 = catchAsync(async (req, res) => {
   const result = await userService.getAllUsers(
     req.query
   );
-  res.status(import_http_status_codes45.StatusCodes.OK).json({
+  res.status(import_http_status_codes46.StatusCodes.OK).json({
     success: true,
     message: "Users retrieved successfully.",
     meta: result.meta,
@@ -9815,7 +10146,7 @@ var getAllUsers2 = catchAsync(async (req, res) => {
 });
 var getUserById2 = catchAsync(async (req, res) => {
   const user = await userService.getUserById(req.params.id);
-  res.status(import_http_status_codes45.StatusCodes.OK).json({
+  res.status(import_http_status_codes46.StatusCodes.OK).json({
     success: true,
     message: "User retrieved successfully.",
     data: user
@@ -9824,7 +10155,7 @@ var getUserById2 = catchAsync(async (req, res) => {
 var getMyProfile3 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const user = await userService.getUserById(currentUser.id);
-  res.status(import_http_status_codes45.StatusCodes.OK).json({
+  res.status(import_http_status_codes46.StatusCodes.OK).json({
     success: true,
     message: "Profile retrieved successfully.",
     data: user
@@ -9837,7 +10168,7 @@ var updateMyProfile = catchAsync(async (req, res) => {
     req.body,
     req.file
   );
-  res.status(import_http_status_codes45.StatusCodes.OK).json({
+  res.status(import_http_status_codes46.StatusCodes.OK).json({
     success: true,
     message: "Profile updated successfully.",
     data: user
@@ -9851,7 +10182,7 @@ var updateRole2 = catchAsync(async (req, res) => {
     currentUser.id,
     currentUser.role
   );
-  res.status(import_http_status_codes45.StatusCodes.OK).json({
+  res.status(import_http_status_codes46.StatusCodes.OK).json({
     success: true,
     message: "User role updated successfully.",
     data: user
@@ -9864,7 +10195,7 @@ var updateStatus2 = catchAsync(async (req, res) => {
     req.body.status,
     currentUser.id
   );
-  res.status(import_http_status_codes45.StatusCodes.OK).json({
+  res.status(import_http_status_codes46.StatusCodes.OK).json({
     success: true,
     message: "User status updated successfully.",
     data: user
@@ -9873,7 +10204,7 @@ var updateStatus2 = catchAsync(async (req, res) => {
 var deleteUser = catchAsync(async (req, res) => {
   const currentUser = req.user;
   await userService.softDeleteUser(req.params.id, currentUser.id);
-  res.status(import_http_status_codes45.StatusCodes.OK).json({
+  res.status(import_http_status_codes46.StatusCodes.OK).json({
     success: true,
     message: "User deleted successfully.",
     data: null
@@ -9927,10 +10258,10 @@ var userRoutes = router15;
 var import_express16 = require("express");
 
 // src/app/modules/blog/blog.controller.ts
-var import_http_status_codes47 = require("http-status-codes");
+var import_http_status_codes48 = require("http-status-codes");
 
 // src/app/modules/blog/blog.service.ts
-var import_http_status_codes46 = require("http-status-codes");
+var import_http_status_codes47 = require("http-status-codes");
 
 // src/app/utils/readingTime.ts
 var WORDS_PER_MINUTE = 200;
@@ -10017,7 +10348,7 @@ var assertCategoryExists = async (categoryId) => {
     select: { id: true }
   });
   if (!category) {
-    throw new appError_default(import_http_status_codes46.StatusCodes.BAD_REQUEST, "Blog category not found.");
+    throw new appError_default(import_http_status_codes47.StatusCodes.BAD_REQUEST, "Blog category not found.");
   }
 };
 var publicPostWhere = (query) => {
@@ -10065,7 +10396,7 @@ var getPublishedPostBySlug = async (slug) => {
     select: BLOG_POST_DETAIL_SELECT
   });
   if (!post) {
-    throw new appError_default(import_http_status_codes46.StatusCodes.NOT_FOUND, "Blog post not found.");
+    throw new appError_default(import_http_status_codes47.StatusCodes.NOT_FOUND, "Blog post not found.");
   }
   const related = await prisma.blogPost.findMany({
     where: {
@@ -10113,7 +10444,7 @@ var getAuthor = async (id) => {
     select: BLOG_AUTHOR_PUBLIC_SELECT
   });
   if (!author) {
-    throw new appError_default(import_http_status_codes46.StatusCodes.NOT_FOUND, "Author not found.");
+    throw new appError_default(import_http_status_codes47.StatusCodes.NOT_FOUND, "Author not found.");
   }
   const postCount = await prisma.blogPost.count({
     where: { authorId: id, status: "PUBLISHED", deletedAt: null }
@@ -10149,7 +10480,7 @@ var getAdminPostById = async (id) => {
     select: BLOG_POST_DETAIL_SELECT
   });
   if (!post) {
-    throw new appError_default(import_http_status_codes46.StatusCodes.NOT_FOUND, "Blog post not found.");
+    throw new appError_default(import_http_status_codes47.StatusCodes.NOT_FOUND, "Blog post not found.");
   }
   return flattenTags(post);
 };
@@ -10183,7 +10514,7 @@ var updatePost = async (id, payload) => {
     select: { id: true }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes46.StatusCodes.NOT_FOUND, "Blog post not found.");
+    throw new appError_default(import_http_status_codes47.StatusCodes.NOT_FOUND, "Blog post not found.");
   }
   if (payload.categoryId !== void 0) {
     await assertCategoryExists(payload.categoryId);
@@ -10216,7 +10547,7 @@ var publishPost = async (id, actorId) => {
     select: { id: true, status: true, publishedAt: true }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes46.StatusCodes.NOT_FOUND, "Blog post not found.");
+    throw new appError_default(import_http_status_codes47.StatusCodes.NOT_FOUND, "Blog post not found.");
   }
   if (existing.status === "PUBLISHED") return getAdminPostById(id);
   await prisma.$transaction([
@@ -10244,7 +10575,7 @@ var unpublishPost = async (id, actorId) => {
     select: { id: true, status: true }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes46.StatusCodes.NOT_FOUND, "Blog post not found.");
+    throw new appError_default(import_http_status_codes47.StatusCodes.NOT_FOUND, "Blog post not found.");
   }
   if (existing.status !== "PUBLISHED") return getAdminPostById(id);
   await prisma.$transaction([
@@ -10268,7 +10599,7 @@ var softDeletePost = async (id, actorId) => {
     select: { id: true, title: true }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes46.StatusCodes.NOT_FOUND, "Blog post not found.");
+    throw new appError_default(import_http_status_codes47.StatusCodes.NOT_FOUND, "Blog post not found.");
   }
   await prisma.$transaction([
     prisma.blogPost.update({ where: { id }, data: { deletedAt: /* @__PURE__ */ new Date() } }),
@@ -10291,7 +10622,7 @@ var createCategory = async (payload) => {
   });
   if (duplicate) {
     throw new appError_default(
-      import_http_status_codes46.StatusCodes.CONFLICT,
+      import_http_status_codes47.StatusCodes.CONFLICT,
       "A category with this name already exists."
     );
   }
@@ -10317,7 +10648,7 @@ var updateCategory = async (id, payload) => {
     select: { id: true }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes46.StatusCodes.NOT_FOUND, "Blog category not found.");
+    throw new appError_default(import_http_status_codes47.StatusCodes.NOT_FOUND, "Blog category not found.");
   }
   if (payload.name !== void 0) {
     const duplicate = await prisma.blogCategory.findFirst({
@@ -10329,7 +10660,7 @@ var updateCategory = async (id, payload) => {
     });
     if (duplicate) {
       throw new appError_default(
-        import_http_status_codes46.StatusCodes.CONFLICT,
+        import_http_status_codes47.StatusCodes.CONFLICT,
         "A category with this name already exists."
       );
     }
@@ -10352,12 +10683,12 @@ var deleteCategory = async (id) => {
     select: { id: true }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes46.StatusCodes.NOT_FOUND, "Blog category not found.");
+    throw new appError_default(import_http_status_codes47.StatusCodes.NOT_FOUND, "Blog category not found.");
   }
   const postCount = await prisma.blogPost.count({ where: { categoryId: id } });
   if (postCount > 0) {
     throw new appError_default(
-      import_http_status_codes46.StatusCodes.CONFLICT,
+      import_http_status_codes47.StatusCodes.CONFLICT,
       "This category still has posts. Move them to another category first."
     );
   }
@@ -10366,7 +10697,7 @@ var deleteCategory = async (id) => {
 };
 var uploadCover = async (file) => {
   if (!file) {
-    throw new appError_default(import_http_status_codes46.StatusCodes.BAD_REQUEST, "An image file is required.");
+    throw new appError_default(import_http_status_codes47.StatusCodes.BAD_REQUEST, "An image file is required.");
   }
   const uploaded = await uploadFileToCloudinary(
     file.buffer,
@@ -10405,7 +10736,7 @@ var queryOf = (req) => req.query;
 var getPublishedPosts2 = catchAsync(async (req, res) => {
   const result = await blogService.getPublishedPosts(queryOf(req));
   setPublicCache(res);
-  res.status(import_http_status_codes47.StatusCodes.OK).json({
+  res.status(import_http_status_codes48.StatusCodes.OK).json({
     success: true,
     message: "Blog posts retrieved successfully.",
     meta: result.meta,
@@ -10415,7 +10746,7 @@ var getPublishedPosts2 = catchAsync(async (req, res) => {
 var getPublishedPostBySlug2 = catchAsync(async (req, res) => {
   const post = await blogService.getPublishedPostBySlug(req.params.slug);
   setPublicCache(res);
-  res.status(import_http_status_codes47.StatusCodes.OK).json({
+  res.status(import_http_status_codes48.StatusCodes.OK).json({
     success: true,
     message: "Blog post retrieved successfully.",
     data: post
@@ -10424,7 +10755,7 @@ var getPublishedPostBySlug2 = catchAsync(async (req, res) => {
 var getCategories2 = catchAsync(async (_req, res) => {
   const categories = await blogService.getCategories();
   setPublicCache(res);
-  res.status(import_http_status_codes47.StatusCodes.OK).json({
+  res.status(import_http_status_codes48.StatusCodes.OK).json({
     success: true,
     message: "Blog categories retrieved successfully.",
     data: categories
@@ -10433,7 +10764,7 @@ var getCategories2 = catchAsync(async (_req, res) => {
 var getTags2 = catchAsync(async (_req, res) => {
   const tags = await blogService.getTags();
   setPublicCache(res);
-  res.status(import_http_status_codes47.StatusCodes.OK).json({
+  res.status(import_http_status_codes48.StatusCodes.OK).json({
     success: true,
     message: "Blog tags retrieved successfully.",
     data: tags
@@ -10442,7 +10773,7 @@ var getTags2 = catchAsync(async (_req, res) => {
 var getAuthor2 = catchAsync(async (req, res) => {
   const author = await blogService.getAuthor(req.params.id);
   setPublicCache(res);
-  res.status(import_http_status_codes47.StatusCodes.OK).json({
+  res.status(import_http_status_codes48.StatusCodes.OK).json({
     success: true,
     message: "Author retrieved successfully.",
     data: author
@@ -10450,7 +10781,7 @@ var getAuthor2 = catchAsync(async (req, res) => {
 });
 var getAdminPosts2 = catchAsync(async (req, res) => {
   const result = await blogService.getAdminPosts(queryOf(req));
-  res.status(import_http_status_codes47.StatusCodes.OK).json({
+  res.status(import_http_status_codes48.StatusCodes.OK).json({
     success: true,
     message: "Blog posts retrieved successfully.",
     meta: result.meta,
@@ -10459,7 +10790,7 @@ var getAdminPosts2 = catchAsync(async (req, res) => {
 });
 var getAdminPostById2 = catchAsync(async (req, res) => {
   const post = await blogService.getAdminPostById(req.params.id);
-  res.status(import_http_status_codes47.StatusCodes.OK).json({
+  res.status(import_http_status_codes48.StatusCodes.OK).json({
     success: true,
     message: "Blog post retrieved successfully.",
     data: post
@@ -10468,7 +10799,7 @@ var getAdminPostById2 = catchAsync(async (req, res) => {
 var createPost2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const post = await blogService.createPost(currentUser.id, req.body);
-  res.status(import_http_status_codes47.StatusCodes.CREATED).json({
+  res.status(import_http_status_codes48.StatusCodes.CREATED).json({
     success: true,
     message: "Blog post created successfully.",
     data: post
@@ -10476,7 +10807,7 @@ var createPost2 = catchAsync(async (req, res) => {
 });
 var updatePost2 = catchAsync(async (req, res) => {
   const post = await blogService.updatePost(req.params.id, req.body);
-  res.status(import_http_status_codes47.StatusCodes.OK).json({
+  res.status(import_http_status_codes48.StatusCodes.OK).json({
     success: true,
     message: "Blog post updated successfully.",
     data: post
@@ -10485,7 +10816,7 @@ var updatePost2 = catchAsync(async (req, res) => {
 var publishPost2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const post = await blogService.publishPost(req.params.id, currentUser.id);
-  res.status(import_http_status_codes47.StatusCodes.OK).json({
+  res.status(import_http_status_codes48.StatusCodes.OK).json({
     success: true,
     message: "Blog post published.",
     data: post
@@ -10494,7 +10825,7 @@ var publishPost2 = catchAsync(async (req, res) => {
 var unpublishPost2 = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const post = await blogService.unpublishPost(req.params.id, currentUser.id);
-  res.status(import_http_status_codes47.StatusCodes.OK).json({
+  res.status(import_http_status_codes48.StatusCodes.OK).json({
     success: true,
     message: "Blog post moved back to draft.",
     data: post
@@ -10503,7 +10834,7 @@ var unpublishPost2 = catchAsync(async (req, res) => {
 var deletePost = catchAsync(async (req, res) => {
   const currentUser = req.user;
   const result = await blogService.softDeletePost(req.params.id, currentUser.id);
-  res.status(import_http_status_codes47.StatusCodes.OK).json({
+  res.status(import_http_status_codes48.StatusCodes.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -10511,7 +10842,7 @@ var deletePost = catchAsync(async (req, res) => {
 });
 var createCategory2 = catchAsync(async (req, res) => {
   const category = await blogService.createCategory(req.body);
-  res.status(import_http_status_codes47.StatusCodes.CREATED).json({
+  res.status(import_http_status_codes48.StatusCodes.CREATED).json({
     success: true,
     message: "Blog category created successfully.",
     data: category
@@ -10519,7 +10850,7 @@ var createCategory2 = catchAsync(async (req, res) => {
 });
 var updateCategory2 = catchAsync(async (req, res) => {
   const category = await blogService.updateCategory(req.params.id, req.body);
-  res.status(import_http_status_codes47.StatusCodes.OK).json({
+  res.status(import_http_status_codes48.StatusCodes.OK).json({
     success: true,
     message: "Blog category updated successfully.",
     data: category
@@ -10527,7 +10858,7 @@ var updateCategory2 = catchAsync(async (req, res) => {
 });
 var deleteCategory2 = catchAsync(async (req, res) => {
   const result = await blogService.deleteCategory(req.params.id);
-  res.status(import_http_status_codes47.StatusCodes.OK).json({
+  res.status(import_http_status_codes48.StatusCodes.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -10535,7 +10866,7 @@ var deleteCategory2 = catchAsync(async (req, res) => {
 });
 var uploadCover2 = catchAsync(async (req, res) => {
   const result = await blogService.uploadCover(req.file);
-  res.status(import_http_status_codes47.StatusCodes.CREATED).json({
+  res.status(import_http_status_codes48.StatusCodes.CREATED).json({
     success: true,
     message: "Cover image uploaded successfully.",
     data: result
@@ -10637,10 +10968,10 @@ var blogRoutes = router16;
 var import_express17 = require("express");
 
 // src/app/modules/contact/contact.controller.ts
-var import_http_status_codes49 = require("http-status-codes");
+var import_http_status_codes50 = require("http-status-codes");
 
 // src/app/modules/contact/contact.service.ts
-var import_http_status_codes48 = require("http-status-codes");
+var import_http_status_codes49 = require("http-status-codes");
 
 // src/app/modules/contact/contact.const.ts
 var CONTACT_MESSAGE_SELECT = {
@@ -10752,7 +11083,7 @@ var updateStatus3 = async (id, payload) => {
     select: { id: true }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes48.StatusCodes.NOT_FOUND, "Message not found.");
+    throw new appError_default(import_http_status_codes49.StatusCodes.NOT_FOUND, "Message not found.");
   }
   return prisma.contactMessage.update({
     where: { id },
@@ -10769,7 +11100,7 @@ var deleteMessage = async (id) => {
     select: { id: true }
   });
   if (!existing) {
-    throw new appError_default(import_http_status_codes48.StatusCodes.NOT_FOUND, "Message not found.");
+    throw new appError_default(import_http_status_codes49.StatusCodes.NOT_FOUND, "Message not found.");
   }
   await prisma.contactMessage.delete({ where: { id } });
   return { message: "Message deleted successfully." };
@@ -10784,7 +11115,7 @@ var contactService = {
 // src/app/modules/contact/contact.controller.ts
 var createMessage2 = catchAsync(async (req, res) => {
   const result = await contactService.createMessage(req.body);
-  res.status(import_http_status_codes49.StatusCodes.CREATED).json({
+  res.status(import_http_status_codes50.StatusCodes.CREATED).json({
     success: true,
     message: "Thanks! Your message has been sent.",
     data: result
@@ -10794,7 +11125,7 @@ var getMessages2 = catchAsync(async (req, res) => {
   const result = await contactService.getMessages(
     req.query
   );
-  res.status(import_http_status_codes49.StatusCodes.OK).json({
+  res.status(import_http_status_codes50.StatusCodes.OK).json({
     success: true,
     message: "Messages retrieved successfully.",
     meta: result.meta,
@@ -10806,7 +11137,7 @@ var updateStatus4 = catchAsync(async (req, res) => {
     req.params.id,
     req.body
   );
-  res.status(import_http_status_codes49.StatusCodes.OK).json({
+  res.status(import_http_status_codes50.StatusCodes.OK).json({
     success: true,
     message: "Message updated successfully.",
     data: message
@@ -10814,7 +11145,7 @@ var updateStatus4 = catchAsync(async (req, res) => {
 });
 var deleteMessage2 = catchAsync(async (req, res) => {
   const result = await contactService.deleteMessage(req.params.id);
-  res.status(import_http_status_codes49.StatusCodes.OK).json({
+  res.status(import_http_status_codes50.StatusCodes.OK).json({
     success: true,
     message: result.message,
     data: null
@@ -10868,218 +11199,15 @@ var contactRoutes = router17;
 // src/app/modules/automation/automation.routes.ts
 var import_express18 = require("express");
 
-// src/app/modules/automation/automation.controller.ts
-var import_http_status_codes51 = require("http-status-codes");
-
-// src/app/utils/sendResponse.ts
-var sendResponse = (res, payload) => {
-  const { success, statusCode, message, data, meta } = payload;
-  res.status(statusCode).json({ success, statusCode, message, data, ...meta && { meta } });
-};
-
-// src/app/modules/automation/automation.const.ts
-var AUTOMATION_DISPATCH = {
-  BATCH_SIZE: 10,
-  REQUEST_TIMEOUT_MS: 8e3,
-  LOCK_TIMEOUT_MS: 5 * 60 * 1e3,
-  BASE_RETRY_DELAY_SECONDS: 30,
-  MAX_RETRY_DELAY_SECONDS: 3600,
-  LOCAL_INTERVAL_MS: 5e3
-};
-var AUTOMATION_EVENT_TYPES = {
-  SYSTEM_TEST: "system.test"
-};
-
-// src/app/modules/automation/automation.service.ts
-var import_http_status_codes50 = require("http-status-codes");
-
-// src/app/modules/automation/automation.signature.ts
-var import_node_crypto4 = require("crypto");
-var signAutomationPayload = (body, secret, timestamp) => (0, import_node_crypto4.createHmac)("sha256", secret).update(`${timestamp}.${body}`).digest("hex");
-var safeEqual = (a, b) => {
-  const aBuffer = Buffer.from(a);
-  const bBuffer = Buffer.from(b);
-  return aBuffer.length === bBuffer.length && (0, import_node_crypto4.timingSafeEqual)(aBuffer, bBuffer);
-};
-
-// src/app/modules/automation/automation.service.ts
-var emitEvent = async (input, db = prisma) => {
-  await db.automationEvent.createMany({
-    data: [
-      {
-        eventType: input.eventType,
-        aggregateType: input.aggregateType,
-        aggregateId: input.aggregateId,
-        payload: input.payload,
-        dedupeKey: input.dedupeKey ?? null
-      }
-    ],
-    skipDuplicates: true
-  });
-};
-var claimEvents = async (limit) => {
-  const now = /* @__PURE__ */ new Date();
-  const staleBefore = new Date(
-    now.getTime() - AUTOMATION_DISPATCH.LOCK_TIMEOUT_MS
-  );
-  const claimable = {
-    OR: [
-      {
-        status: "PENDING",
-        OR: [{ nextRetryAt: null }, { nextRetryAt: { lte: now } }]
-      },
-      { status: "PROCESSING", lockedAt: { lt: staleBefore } }
-    ]
-  };
-  const candidates = await prisma.automationEvent.findMany({
-    where: claimable,
-    orderBy: { createdAt: "asc" },
-    take: limit,
-    select: { id: true }
-  });
-  if (candidates.length === 0) return [];
-  const ids = candidates.map((candidate) => candidate.id);
-  await prisma.automationEvent.updateMany({
-    where: { AND: [{ id: { in: ids } }, claimable] },
-    data: { status: "PROCESSING", lockedAt: now }
-  });
-  return prisma.automationEvent.findMany({
-    where: { id: { in: ids }, status: "PROCESSING", lockedAt: now },
-    orderBy: { createdAt: "asc" }
-  });
-};
-var markDelivered = async (id) => {
-  await prisma.automationEvent.update({
-    where: { id },
-    data: {
-      status: "DELIVERED",
-      deliveredAt: /* @__PURE__ */ new Date(),
-      lockedAt: null,
-      lastError: null
-    }
-  });
-};
-var markFailedAttempt = async (event, message) => {
-  const retryCount = event.retryCount + 1;
-  const exhausted = retryCount >= event.maxRetries;
-  const delaySeconds = Math.min(
-    AUTOMATION_DISPATCH.BASE_RETRY_DELAY_SECONDS * 2 ** retryCount,
-    AUTOMATION_DISPATCH.MAX_RETRY_DELAY_SECONDS
-  );
-  await prisma.automationEvent.update({
-    where: { id: event.id },
-    data: {
-      status: exhausted ? "FAILED" : "PENDING",
-      retryCount,
-      lockedAt: null,
-      lastError: message.slice(0, 500),
-      nextRetryAt: exhausted ? null : new Date(Date.now() + delaySeconds * 1e3)
-    }
-  });
-};
-var deliverEvent = async (event, webhookUrl, webhookSecret) => {
-  const body = JSON.stringify({
-    id: event.id,
-    type: event.eventType,
-    aggregateType: event.aggregateType,
-    aggregateId: event.aggregateId,
-    occurredAt: event.createdAt.toISOString(),
-    data: event.payload
-  });
-  const timestamp = Date.now().toString();
-  const signature = signAutomationPayload(body, webhookSecret, timestamp);
-  try {
-    const response = await fetch(webhookUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Event-Type": event.eventType,
-        "X-Idempotency-Key": event.id,
-        "X-Timestamp": timestamp,
-        "X-Signature": `sha256=${signature}`
-      },
-      body,
-      signal: AbortSignal.timeout(AUTOMATION_DISPATCH.REQUEST_TIMEOUT_MS)
-    });
-    if (!response.ok) {
-      throw new Error(`n8n responded with status ${response.status}`);
-    }
-    await markDelivered(event.id);
-    return true;
-  } catch (error) {
-    await markFailedAttempt(
-      event,
-      error instanceof Error ? error.message : "Unknown delivery error"
-    );
-    return false;
-  }
-};
-var dispatchPendingEvents = async () => {
-  const { webhookUrl, webhookSecret } = config_default.n8n;
-  if (!webhookUrl || !webhookSecret) {
-    throw new appError_default(
-      import_http_status_codes50.StatusCodes.SERVICE_UNAVAILABLE,
-      "n8n webhook is not configured.",
-      "AUTOMATION_NOT_CONFIGURED"
-    );
-  }
-  const events = await claimEvents(AUTOMATION_DISPATCH.BATCH_SIZE);
-  const results = await Promise.all(
-    events.map((event) => deliverEvent(event, webhookUrl, webhookSecret))
-  );
-  const delivered = results.filter(Boolean).length;
-  return {
-    claimed: events.length,
-    delivered,
-    failed: events.length - delivered
-  };
-};
-var automationService = {
-  emitEvent,
-  dispatchPendingEvents
-};
-
-// src/app/modules/automation/automation.controller.ts
-var dispatch = catchAsync(async (_req, res) => {
-  const result = await automationService.dispatchPendingEvents();
-  sendResponse(res, {
-    success: true,
-    statusCode: import_http_status_codes51.StatusCodes.OK,
-    message: "Automation events dispatched.",
-    data: result
-  });
-});
-var emitTestEvent = catchAsync(async (_req, res) => {
-  await automationService.emitEvent({
-    eventType: AUTOMATION_EVENT_TYPES.SYSTEM_TEST,
-    aggregateType: "System",
-    aggregateId: "test",
-    payload: {
-      message: "Hello from Evalora",
-      sentAt: (/* @__PURE__ */ new Date()).toISOString()
-    }
-  });
-  sendResponse(res, {
-    success: true,
-    statusCode: import_http_status_codes51.StatusCodes.CREATED,
-    message: "Test event queued.",
-    data: null
-  });
-});
-var automationController = {
-  dispatch,
-  emitTestEvent
-};
-
 // src/app/middlewares/requireAutomationApiKey.ts
-var import_http_status_codes52 = require("http-status-codes");
+var import_http_status_codes51 = require("http-status-codes");
 var requireAutomationApiKey = (req, _res, next) => {
   const expected = config_default.n8n.apiKey;
   const provided = req.header("x-api-key");
   if (!expected || !provided || !safeEqual(provided, expected)) {
     return next(
       new appError_default(
-        import_http_status_codes52.StatusCodes.UNAUTHORIZED,
+        import_http_status_codes51.StatusCodes.UNAUTHORIZED,
         "Invalid or missing API key.",
         "INVALID_API_KEY"
       )
@@ -11088,15 +11216,761 @@ var requireAutomationApiKey = (req, _res, next) => {
   next();
 };
 
+// src/app/modules/automation/automation.controller.ts
+var import_http_status_codes53 = require("http-status-codes");
+
+// src/app/utils/sendResponse.ts
+var sendResponse = (res, payload) => {
+  const { success, statusCode, message, data, meta } = payload;
+  res.status(statusCode).json({ success, statusCode, message, data, ...meta && { meta } });
+};
+
+// src/app/modules/automation/automation.ai.ts
+var import_http_status_codes52 = require("http-status-codes");
+var loadWrittenSubmission = async (submissionId) => {
+  const submission = await prisma.submission.findUnique({
+    where: { id: submissionId },
+    select: {
+      id: true,
+      attemptId: true,
+      problemId: true,
+      answerText: true,
+      evaluation: {
+        select: { id: true, status: true, maxScore: true, reviewStatus: true }
+      },
+      problem: {
+        select: { title: true, description: true, type: true, rubric: true }
+      },
+      attempt: {
+        select: {
+          candidateId: true,
+          assessmentId: true,
+          assessment: { select: { companyId: true } }
+        }
+      }
+    }
+  });
+  if (!submission) {
+    throw new appError_default(import_http_status_codes52.StatusCodes.NOT_FOUND, "Submission not found.");
+  }
+  if (submission.problem.type !== "WRITTEN") {
+    throw new appError_default(
+      import_http_status_codes52.StatusCodes.BAD_REQUEST,
+      "AI evaluation is only available for WRITTEN problems."
+    );
+  }
+  return submission;
+};
+var getAiInput = async (submissionId) => {
+  const submission = await loadWrittenSubmission(submissionId);
+  if (!submission.evaluation || submission.evaluation.status !== "PENDING") {
+    return { eligible: false, reason: "ALREADY_GRADED_OR_NOT_PENDING" };
+  }
+  if (submission.evaluation.reviewStatus === "APPROVED" || submission.evaluation.reviewStatus === "OVERRIDDEN") {
+    return { eligible: false, reason: "ALREADY_REVIEWED" };
+  }
+  if (!submission.answerText || submission.answerText.trim() === "") {
+    return { eligible: false, reason: "EMPTY_ANSWER" };
+  }
+  const consent = await prisma.userConsent.findUnique({
+    where: {
+      userId_consentType: {
+        userId: submission.attempt.candidateId,
+        consentType: "AI_PROCESSING"
+      }
+    },
+    select: { granted: true }
+  });
+  if (!consent?.granted) {
+    return { eligible: false, reason: "NO_AI_CONSENT" };
+  }
+  return {
+    eligible: true,
+    submissionId: submission.id,
+    question: {
+      title: submission.problem.title,
+      description: submission.problem.description
+    },
+    rubric: submission.problem.rubric ?? null,
+    answer: submission.answerText,
+    maxScore: submission.evaluation.maxScore
+  };
+};
+var saveAiResult = async (submissionId, input) => {
+  const submission = await loadWrittenSubmission(submissionId);
+  if (!submission.evaluation) {
+    throw new appError_default(import_http_status_codes52.StatusCodes.CONFLICT, "Submission has no evaluation yet.");
+  }
+  if (submission.evaluation.status !== "PENDING" || submission.evaluation.reviewStatus === "APPROVED" || submission.evaluation.reviewStatus === "OVERRIDDEN") {
+    throw new appError_default(
+      import_http_status_codes52.StatusCodes.CONFLICT,
+      "This submission was already graded by a recruiter."
+    );
+  }
+  if (input.aiScore > submission.evaluation.maxScore) {
+    throw new appError_default(
+      import_http_status_codes52.StatusCodes.BAD_REQUEST,
+      `aiScore cannot exceed the maximum marks (${submission.evaluation.maxScore}).`
+    );
+  }
+  await prisma.submissionEvaluation.update({
+    where: { id: submission.evaluation.id },
+    data: {
+      aiScore: input.aiScore,
+      aiFeedback: input.aiFeedback,
+      aiModel: input.aiModel,
+      aiEvaluatedAt: /* @__PURE__ */ new Date(),
+      reviewStatus: "PENDING_REVIEW"
+    }
+  });
+  const companyId = submission.attempt.assessment.companyId;
+  try {
+    const company = await prisma.company.findUnique({
+      where: { id: companyId },
+      select: { ownerId: true }
+    });
+    if (company) {
+      await prisma.notification.create({
+        data: {
+          userId: company.ownerId,
+          title: "AI suggestion ready for review",
+          message: "A written answer has an AI-suggested score waiting for your review.",
+          type: "EVALUATION_REVIEW_NEEDED",
+          metadata: {
+            submissionId,
+            attemptId: submission.attemptId,
+            assessmentId: submission.attempt.assessmentId
+          }
+        }
+      });
+    }
+  } catch (error) {
+    console.error("[AI] Failed to create review notification", error);
+  }
+  try {
+    await automationService.emitEvent({
+      eventType: AUTOMATION_EVENT_TYPES.EVALUATION_REVIEW_NEEDED,
+      aggregateType: "Submission",
+      aggregateId: submissionId,
+      dedupeKey: `${AUTOMATION_EVENT_TYPES.EVALUATION_REVIEW_NEEDED}:${submissionId}`,
+      payload: {
+        submissionId,
+        attemptId: submission.attemptId,
+        assessmentId: submission.attempt.assessmentId
+      }
+    });
+  } catch (error) {
+    console.error("[AI] Failed to emit review event", error);
+  }
+  return { saved: true, reviewStatus: "PENDING_REVIEW" };
+};
+var automationAi = {
+  getAiInput,
+  saveAiResult
+};
+
+// src/app/modules/automation/automation.maintenance.ts
+var HOUR_MS = 60 * 60 * 1e3;
+var REMINDER_WINDOW_MS = 24 * HOUR_MS;
+var BATCH_SIZE = 50;
+var reminderEmailTemplate = (assessmentTitle, expiresAt) => `
+	<div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; color: #111;">
+		<h2>Your invitation expires soon</h2>
+		<p>Your invitation to <strong>${escapeHtml(assessmentTitle)}</strong> expires within 24 hours.</p>
+		<p>Log in to your account and accept the invitation to start the assessment.</p>
+		<p style="font-size: 13px; color: #666;">Expires at: ${expiresAt.toUTCString()}</p>
+	</div>
+`;
+var expireStaleAttempts = async () => {
+  const stale = await prisma.assessmentAttempt.findMany({
+    where: { status: "IN_PROGRESS", expiresAt: { lt: /* @__PURE__ */ new Date() } },
+    select: { id: true, candidateId: true },
+    orderBy: { expiresAt: "asc" },
+    take: BATCH_SIZE
+  });
+  let finalized = 0;
+  let failed = 0;
+  for (const attempt of stale) {
+    try {
+      await attemptService.getAttemptById(attempt.id, {
+        id: attempt.candidateId,
+        role: "CANDIDATE"
+      });
+      finalized += 1;
+    } catch (error) {
+      failed += 1;
+      console.error("[Maintenance] Failed to finalize attempt", attempt.id, error);
+    }
+  }
+  return { found: stale.length, finalized, failed };
+};
+var expireInvitations = async () => {
+  const result = await prisma.assessmentInvitation.updateMany({
+    where: { status: "PENDING", expiresAt: { lt: /* @__PURE__ */ new Date() } },
+    data: { status: "EXPIRED" }
+  });
+  return { expired: result.count };
+};
+var sendInvitationReminders = async () => {
+  const now = /* @__PURE__ */ new Date();
+  const due = await prisma.assessmentInvitation.findMany({
+    where: {
+      status: "PENDING",
+      reminderSentAt: null,
+      expiresAt: {
+        gt: now,
+        lte: new Date(now.getTime() + REMINDER_WINDOW_MS)
+      },
+      assessment: { deletedAt: null, status: { in: ["PUBLISHED", "ACTIVE"] } }
+    },
+    select: {
+      id: true,
+      email: true,
+      candidateId: true,
+      assessmentId: true,
+      expiresAt: true,
+      assessment: { select: { title: true } }
+    },
+    orderBy: { expiresAt: "asc" },
+    take: BATCH_SIZE
+  });
+  let sent = 0;
+  let failed = 0;
+  for (const invitation of due) {
+    if (!invitation.expiresAt) continue;
+    const claimed = await prisma.assessmentInvitation.updateMany({
+      where: { id: invitation.id, reminderSentAt: null },
+      data: { reminderSentAt: now }
+    });
+    if (claimed.count === 0) continue;
+    try {
+      await sendEmail({
+        to: invitation.email,
+        subject: `Reminder: ${invitation.assessment.title} expires soon`,
+        html: reminderEmailTemplate(
+          invitation.assessment.title,
+          invitation.expiresAt
+        )
+      });
+      if (invitation.candidateId) {
+        try {
+          await prisma.notification.create({
+            data: {
+              userId: invitation.candidateId,
+              title: "Invitation expires soon",
+              message: `Your invitation to "${invitation.assessment.title}" expires within 24 hours.`,
+              type: "ASSESSMENT_REMINDER",
+              metadata: {
+                assessmentId: invitation.assessmentId,
+                invitationId: invitation.id
+              }
+            }
+          });
+        } catch (error) {
+          console.error("[Maintenance] Failed to create reminder notification", error);
+        }
+      }
+      sent += 1;
+    } catch (error) {
+      failed += 1;
+      console.error("[Maintenance] Reminder failed", invitation.id, error);
+      await prisma.assessmentInvitation.updateMany({
+        where: { id: invitation.id },
+        data: { reminderSentAt: null }
+      });
+    }
+  }
+  return { found: due.length, sent, failed };
+};
+var runMaintenance = async () => {
+  const attempts = await expireStaleAttempts();
+  const invitations = await expireInvitations();
+  const reminders = await sendInvitationReminders();
+  return { attempts, invitations, reminders };
+};
+var automationMaintenance = {
+  expireStaleAttempts,
+  expireInvitations,
+  sendInvitationReminders,
+  runMaintenance
+};
+
+// src/app/modules/automation/automation.controller.ts
+var dispatch = catchAsync(async (_req, res) => {
+  const result = await automationService.dispatchPendingEvents();
+  sendResponse(res, {
+    success: true,
+    statusCode: import_http_status_codes53.StatusCodes.OK,
+    message: "Automation events dispatched.",
+    data: result
+  });
+});
+var runMaintenance2 = catchAsync(async (_req, res) => {
+  const result = await automationMaintenance.runMaintenance();
+  sendResponse(res, {
+    success: true,
+    statusCode: import_http_status_codes53.StatusCodes.OK,
+    message: "Maintenance run completed.",
+    data: result
+  });
+});
+var getAiInput2 = catchAsync(async (req, res) => {
+  const result = await automationAi.getAiInput(req.params.id);
+  sendResponse(res, {
+    success: true,
+    statusCode: import_http_status_codes53.StatusCodes.OK,
+    message: "AI input retrieved.",
+    data: result
+  });
+});
+var saveAiResult2 = catchAsync(async (req, res) => {
+  const result = await automationAi.saveAiResult(
+    req.params.id,
+    req.body
+  );
+  sendResponse(res, {
+    success: true,
+    statusCode: import_http_status_codes53.StatusCodes.OK,
+    message: "AI result saved.",
+    data: result
+  });
+});
+var automationController = {
+  dispatch,
+  runMaintenance: runMaintenance2,
+  getAiInput: getAiInput2,
+  saveAiResult: saveAiResult2
+};
+
+// src/app/modules/automation/automation.validation.ts
+var import_zod17 = require("zod");
+var aiResultSchema = import_zod17.z.object({
+  aiScore: import_zod17.z.coerce.number().int().min(0, "Score cannot be negative."),
+  aiFeedback: import_zod17.z.string().trim().min(1).max(2e3),
+  aiModel: import_zod17.z.string().trim().min(1).max(100)
+});
+var automationValidation = {
+  aiResultSchema
+};
+
 // src/app/modules/automation/automation.routes.ts
 var router18 = (0, import_express18.Router)();
 router18.use(requireAutomationApiKey);
 router18.post("/dispatch", automationController.dispatch);
-router18.post("/test-event", automationController.emitTestEvent);
+router18.post("/maintenance", automationController.runMaintenance);
+router18.get("/submissions/:id/ai-input", automationController.getAiInput);
+router18.post(
+  "/submissions/:id/ai-result",
+  validateRequest(automationValidation.aiResultSchema),
+  automationController.saveAiResult
+);
 var automationRoutes = router18;
 
+// src/app/modules/automation/automation.extra.routes.ts
+var import_express19 = require("express");
+
+// src/app/modules/automation/automation.extra.controller.ts
+var import_http_status_codes56 = require("http-status-codes");
+
+// src/app/modules/automation/automation.admin.ts
+var import_http_status_codes54 = require("http-status-codes");
+var STATUSES = ["PENDING", "PROCESSING", "DELIVERED", "FAILED"];
+var EVENT_LIST_SELECT = {
+  id: true,
+  eventType: true,
+  aggregateType: true,
+  aggregateId: true,
+  status: true,
+  retryCount: true,
+  maxRetries: true,
+  lastError: true,
+  nextRetryAt: true,
+  deliveredAt: true,
+  createdAt: true
+};
+var toPositiveInt = (value, fallback, max) => {
+  const parsed2 = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed2) || parsed2 < 1) return fallback;
+  return Math.min(parsed2, max);
+};
+var listEvents = async (query) => {
+  const page = toPositiveInt(query.page, 1, 1e5);
+  const limit = toPositiveInt(query.limit, 20, 100);
+  const where = {};
+  if (typeof query.status === "string" && STATUSES.includes(query.status)) {
+    where.status = query.status;
+  }
+  if (typeof query.eventType === "string" && query.eventType.length > 0) {
+    where.eventType = query.eventType;
+  }
+  const [rows, total] = await Promise.all([
+    prisma.automationEvent.findMany({
+      where,
+      select: EVENT_LIST_SELECT,
+      orderBy: { createdAt: "desc" },
+      skip: (page - 1) * limit,
+      take: limit
+    }),
+    prisma.automationEvent.count({ where })
+  ]);
+  return {
+    rows,
+    meta: { page, limit, total, totalPage: Math.max(1, Math.ceil(total / limit)) }
+  };
+};
+var getStats = async () => {
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1e3);
+  const [byStatus, last24h, oldestPending] = await Promise.all([
+    prisma.automationEvent.groupBy({
+      by: ["status"],
+      _count: { _all: true }
+    }),
+    prisma.automationEvent.groupBy({
+      by: ["status"],
+      where: { createdAt: { gte: since } },
+      _count: { _all: true }
+    }),
+    prisma.automationEvent.findFirst({
+      where: { status: "PENDING" },
+      orderBy: { createdAt: "asc" },
+      select: { createdAt: true }
+    })
+  ]);
+  const toMap = (rows) => {
+    const out = {
+      PENDING: 0,
+      PROCESSING: 0,
+      DELIVERED: 0,
+      FAILED: 0
+    };
+    for (const row of rows) out[row.status] = row._count._all;
+    return out;
+  };
+  return {
+    total: toMap(byStatus),
+    last24h: toMap(last24h),
+    oldestPendingAt: oldestPending?.createdAt ?? null
+  };
+};
+var retryEvent = async (id) => {
+  const result = await prisma.automationEvent.updateMany({
+    where: { id, status: "FAILED" },
+    data: {
+      status: "PENDING",
+      retryCount: 0,
+      nextRetryAt: null,
+      lockedAt: null,
+      lastError: null
+    }
+  });
+  if (result.count === 0) {
+    const exists = await prisma.automationEvent.findUnique({
+      where: { id },
+      select: { status: true }
+    });
+    if (!exists) {
+      throw new appError_default(import_http_status_codes54.StatusCodes.NOT_FOUND, "Automation event not found.");
+    }
+    throw new appError_default(
+      import_http_status_codes54.StatusCodes.CONFLICT,
+      "Only FAILED events can be retried.",
+      "EVENT_NOT_FAILED"
+    );
+  }
+  return prisma.automationEvent.findUnique({
+    where: { id },
+    select: EVENT_LIST_SELECT
+  });
+};
+var automationAdmin = { listEvents, getStats, retryEvent };
+
+// src/app/modules/automation/automation.report.ts
+var import_http_status_codes55 = require("http-status-codes");
+var PROCTORING_HIGH_RISK_EVENT = "proctoring.high_risk";
+var HEURISTIC_MODEL_NAME = "heuristic";
+var RISK_WEIGHTS = {
+  TAB_SWITCH: 2,
+  FULLSCREEN_EXIT: 3,
+  COPY: 2,
+  PASTE: 3,
+  DEVTOOLS_DETECTED: 10,
+  CAMERA_BLOCKED: 5,
+  MICROPHONE_BLOCKED: 3,
+  WINDOW_BLUR: 1
+};
+var MEDIUM_THRESHOLD = 15;
+var HIGH_THRESHOLD = 40;
+var computeHeuristicRisk = (counts) => {
+  let score = 0;
+  for (const [type, count] of Object.entries(counts)) {
+    score += (RISK_WEIGHTS[type] ?? 0) * count;
+  }
+  const level = score >= HIGH_THRESHOLD ? "HIGH" : score >= MEDIUM_THRESHOLD ? "MEDIUM" : "LOW";
+  return { score, level };
+};
+var hasAiConsent = async (userId) => {
+  const consent = await prisma.userConsent.findUnique({
+    where: { userId_consentType: { userId, consentType: "AI_PROCESSING" } },
+    select: { granted: true }
+  });
+  return consent?.granted === true;
+};
+var findAttemptOrThrow = async (attemptId) => {
+  const attempt = await prisma.assessmentAttempt.findUnique({
+    where: { id: attemptId },
+    select: {
+      id: true,
+      status: true,
+      candidateId: true,
+      startedAt: true,
+      submittedAt: true,
+      autoSubmittedAt: true,
+      tabSwitchCount: true,
+      assessment: {
+        select: {
+          id: true,
+          title: true,
+          durationMinutes: true,
+          totalMarks: true,
+          passingMarks: true,
+          company: { select: { ownerId: true } }
+        }
+      },
+      result: {
+        select: { totalScore: true, totalMarks: true, percentage: true }
+      },
+      submissions: {
+        select: {
+          problem: { select: { type: true } },
+          evaluation: { select: { score: true, maxScore: true } }
+        }
+      }
+    }
+  });
+  if (!attempt) {
+    throw new appError_default(import_http_status_codes55.StatusCodes.NOT_FOUND, "Attempt not found.");
+  }
+  return attempt;
+};
+var getReportInput = async (attemptId) => {
+  const attempt = await findAttemptOrThrow(attemptId);
+  if (attempt.status === "IN_PROGRESS" || attempt.status === "NOT_STARTED") {
+    throw new appError_default(
+      import_http_status_codes55.StatusCodes.CONFLICT,
+      "Attempt is not finished yet.",
+      "ATTEMPT_NOT_FINISHED"
+    );
+  }
+  const grouped = await prisma.proctoringEvent.groupBy({
+    by: ["eventType"],
+    where: { attemptId },
+    _count: { _all: true }
+  });
+  const counts = {};
+  for (const row of grouped) {
+    counts[row.eventType] = row._count._all;
+  }
+  const heuristic = computeHeuristicRisk(counts);
+  const eligible = await hasAiConsent(attempt.candidateId);
+  const finishedAt = attempt.submittedAt ?? attempt.autoSubmittedAt;
+  const minutesUsed = attempt.startedAt && finishedAt ? Math.max(
+    0,
+    Math.round(
+      (finishedAt.getTime() - attempt.startedAt.getTime()) / 6e4
+    )
+  ) : null;
+  const byType = {};
+  for (const submission of attempt.submissions) {
+    const type = submission.problem.type;
+    const bucket = byType[type] ?? { score: 0, maxScore: 0 };
+    bucket.score += submission.evaluation?.score ?? 0;
+    bucket.maxScore += submission.evaluation?.maxScore ?? 0;
+    byType[type] = bucket;
+  }
+  return {
+    eligible,
+    attemptId: attempt.id,
+    assessmentTitle: attempt.assessment.title,
+    autoSubmitted: attempt.autoSubmittedAt !== null,
+    durationMinutes: attempt.assessment.durationMinutes,
+    minutesUsed,
+    result: attempt.result,
+    passingMarks: attempt.assessment.passingMarks,
+    scoreByProblemType: byType,
+    proctoring: {
+      tabSwitchCount: attempt.tabSwitchCount,
+      eventCounts: counts,
+      heuristicRiskScore: heuristic.score,
+      heuristicRiskLevel: heuristic.level
+    }
+  };
+};
+var saveReportResult = async (attemptId, input) => {
+  const attempt = await findAttemptOrThrow(attemptId);
+  const isHeuristic = input.aiModel === HEURISTIC_MODEL_NAME;
+  if (!isHeuristic && !await hasAiConsent(attempt.candidateId)) {
+    throw new appError_default(
+      import_http_status_codes55.StatusCodes.FORBIDDEN,
+      "Candidate has not granted AI processing consent.",
+      "AI_CONSENT_REQUIRED"
+    );
+  }
+  const previous = await prisma.attemptReport.findUnique({
+    where: { attemptId },
+    select: { riskLevel: true }
+  });
+  const now = /* @__PURE__ */ new Date();
+  const hasNarrative = input.summary !== void 0;
+  const data = {
+    riskLevel: input.riskLevel,
+    riskSummary: input.riskSummary,
+    summary: input.summary ?? null,
+    strengths: input.strengths ?? [],
+    weaknesses: input.weaknesses ?? [],
+    recommendation: input.recommendation ?? null,
+    aiModel: input.aiModel,
+    riskAnalyzedAt: now,
+    generatedAt: hasNarrative ? now : null
+  };
+  const report = await prisma.attemptReport.upsert({
+    where: { attemptId },
+    create: { attemptId, ...data },
+    update: data,
+    select: {
+      id: true,
+      attemptId: true,
+      riskLevel: true,
+      riskSummary: true,
+      summary: true,
+      recommendation: true,
+      generatedAt: true
+    }
+  });
+  const becameHigh = input.riskLevel === "HIGH" && previous?.riskLevel !== "HIGH";
+  if (becameHigh) {
+    try {
+      await prisma.notification.create({
+        data: {
+          userId: attempt.assessment.company.ownerId,
+          title: "High proctoring risk",
+          message: `An attempt on "${attempt.assessment.title}" was flagged as high risk. Review it before deciding.`,
+          type: "PROCTORING_ALERT",
+          metadata: {
+            attemptId,
+            assessmentId: attempt.assessment.id
+          }
+        }
+      });
+    } catch {
+    }
+    try {
+      await automationService.emitEvent({
+        eventType: PROCTORING_HIGH_RISK_EVENT,
+        aggregateType: "AssessmentAttempt",
+        aggregateId: attemptId,
+        payload: { attemptId, assessmentId: attempt.assessment.id },
+        dedupeKey: `${PROCTORING_HIGH_RISK_EVENT}:${attemptId}`
+      });
+    } catch {
+    }
+  }
+  return report;
+};
+var automationReport = { getReportInput, saveReportResult };
+
+// src/app/modules/automation/automation.extra.controller.ts
+var idParam = (req) => String(req.params.id ?? "");
+var getReportInput2 = catchAsync(async (req, res) => {
+  const data = await automationReport.getReportInput(idParam(req));
+  sendResponse(res, {
+    success: true,
+    statusCode: import_http_status_codes56.StatusCodes.OK,
+    message: "Report input fetched.",
+    data
+  });
+});
+var saveReportResult2 = catchAsync(async (req, res) => {
+  const data = await automationReport.saveReportResult(idParam(req), req.body);
+  sendResponse(res, {
+    success: true,
+    statusCode: import_http_status_codes56.StatusCodes.OK,
+    message: "Report saved.",
+    data
+  });
+});
+var listEvents2 = catchAsync(async (req, res) => {
+  const { rows, meta } = await automationAdmin.listEvents(
+    req.query
+  );
+  sendResponse(res, {
+    success: true,
+    statusCode: import_http_status_codes56.StatusCodes.OK,
+    message: "Automation events fetched.",
+    data: rows,
+    meta
+  });
+});
+var getStats2 = catchAsync(async (_req, res) => {
+  const data = await automationAdmin.getStats();
+  sendResponse(res, {
+    success: true,
+    statusCode: import_http_status_codes56.StatusCodes.OK,
+    message: "Automation stats fetched.",
+    data
+  });
+});
+var retryEvent2 = catchAsync(async (req, res) => {
+  const data = await automationAdmin.retryEvent(idParam(req));
+  sendResponse(res, {
+    success: true,
+    statusCode: import_http_status_codes56.StatusCodes.OK,
+    message: "Event queued for retry.",
+    data
+  });
+});
+var automationExtraController = {
+  getReportInput: getReportInput2,
+  saveReportResult: saveReportResult2,
+  listEvents: listEvents2,
+  getStats: getStats2,
+  retryEvent: retryEvent2
+};
+
+// src/app/modules/automation/automation.report.validation.ts
+var import_zod18 = require("zod");
+var shortList = import_zod18.z.array(import_zod18.z.string().trim().min(1).max(300)).max(10);
+var reportResultSchema = import_zod18.z.object({
+  riskLevel: import_zod18.z.enum(["LOW", "MEDIUM", "HIGH"]),
+  riskSummary: import_zod18.z.string().trim().min(1).max(1e3),
+  summary: import_zod18.z.string().trim().max(2e3).optional(),
+  strengths: shortList.optional(),
+  weaknesses: shortList.optional(),
+  recommendation: import_zod18.z.string().trim().max(1e3).optional(),
+  aiModel: import_zod18.z.string().trim().min(1).max(100)
+});
+
+// src/app/modules/automation/automation.extra.routes.ts
+var internalRouter = (0, import_express19.Router)();
+internalRouter.use(requireAutomationApiKey);
+internalRouter.get(
+  "/attempts/:id/report-input",
+  automationExtraController.getReportInput
+);
+internalRouter.post(
+  "/attempts/:id/report-result",
+  validateRequest(reportResultSchema),
+  automationExtraController.saveReportResult
+);
+var adminRouter3 = (0, import_express19.Router)();
+adminRouter3.use(requireAuth, requireRole("ADMIN"));
+adminRouter3.get("/events", automationExtraController.listEvents);
+adminRouter3.get("/stats", automationExtraController.getStats);
+adminRouter3.post("/events/:id/retry", automationExtraController.retryEvent);
+var automationInternalExtraRoutes = internalRouter;
+var automationAdminRoutes = adminRouter3;
+
 // src/app/routes/index.ts
-var router19 = (0, import_express19.Router)();
+var router19 = (0, import_express20.Router)();
 var moduleRoutes = [
   { path: "/auth", route: authRoutes },
   { path: "/users", route: userRoutes },
@@ -11114,7 +11988,10 @@ var moduleRoutes = [
   { path: "/consents", route: consentRoutes },
   { path: "/blog", route: blogRoutes },
   { path: "/contact", route: contactRoutes },
-  { path: "/internal/automation", route: automationRoutes }
+  { path: "/internal/automation", route: automationRoutes },
+  { path: "/internal/automation", route: automationInternalExtraRoutes },
+  { path: "/admin/automation", route: automationAdminRoutes },
+  { path: "/ai", route: adminRoutes }
 ];
 for (const { path: path2, route } of moduleRoutes) {
   router19.use(path2, route);
@@ -11122,7 +11999,7 @@ for (const { path: path2, route } of moduleRoutes) {
 var globalRoutes = router19;
 
 // src/app.ts
-var app = (0, import_express20.default)();
+var app = (0, import_express21.default)();
 app.set("trust proxy", 1);
 if (config_default.app.env === "production") {
   app.use(forceHttps);
@@ -11170,9 +12047,9 @@ if (config_default.app.env !== "production") {
   );
 }
 app.all("/api/auth/*splat", (0, import_node3.toNodeHandler)(auth));
-app.use(import_express20.default.json({ limit: "10mb" }));
+app.use(import_express21.default.json({ limit: "10mb" }));
 app.use(sanitizeBody);
-app.use(import_express20.default.urlencoded({ extended: true, limit: "10mb" }));
+app.use(import_express21.default.urlencoded({ extended: true, limit: "10mb" }));
 app.use((0, import_cookie_parser.default)());
 app.use((_req, res, next) => {
   const originalJson = res.json.bind(res);

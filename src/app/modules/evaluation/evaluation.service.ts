@@ -73,7 +73,7 @@ const getSubmissionById = async (id: string, requester: Requester) => {
 };
 
 /**
- * Grading queue for an assessment — every submission still waiting on a
+ * Grading queue for an assessment - every submission still waiting on a
  * human (CODING/WRITTEN with a real answer), across all candidates.
  */
 const getPendingEvaluations = async (
@@ -98,9 +98,12 @@ const getPendingEvaluations = async (
 
 /**
  * Manually grades a CODING or WRITTEN submission. MCQ submissions are
- * rejected outright — they're graded automatically the moment the attempt
+ * rejected outright - they're graded automatically the moment the attempt
  * is finalized (see grading.util.ts) and re-grading them manually would
  * let a recruiter silently override an objectively-checkable answer.
+ *
+ * If an AI suggestion was waiting for review, grading it here marks it
+ * APPROVED (same score as the AI) or OVERRIDDEN (different score).
  *
  * Triggers recomputeResult() afterward, which is what actually moves the
  * attempt's Result out of PENDING once every submission is COMPLETED.
@@ -115,6 +118,7 @@ const evaluateSubmission = async (
 		where: { id },
 		include: {
 			problem: { select: { id: true, type: true, defaultMarks: true } },
+			evaluation: { select: { reviewStatus: true, aiScore: true } },
 			attempt: {
 				select: {
 					id: true,
@@ -170,6 +174,13 @@ const evaluateSubmission = async (
 		);
 	}
 
+	const reviewStatus =
+		submission.evaluation?.reviewStatus === "PENDING_REVIEW"
+			? submission.evaluation.aiScore === payload.score
+				? ("APPROVED" as const)
+				: ("OVERRIDDEN" as const)
+			: undefined;
+
 	await prisma.$transaction(async (tx) => {
 		if (submission.problem.type === "CODING" && payload.testCaseResults) {
 			for (const testCaseResult of payload.testCaseResults) {
@@ -214,6 +225,7 @@ const evaluateSubmission = async (
 				isAutoEvaluated: false,
 				evaluatorId,
 				...(payload.feedback !== undefined && { feedback: payload.feedback }),
+				...(reviewStatus && { reviewStatus, reviewedAt: new Date() }),
 				evaluatedAt: new Date(),
 			},
 			create: {
@@ -237,9 +249,94 @@ const evaluateSubmission = async (
 	});
 };
 
+/**
+ * Accepts the AI-suggested score and feedback as the final grade. Only a
+ * recruiter can do this, so the human stays the final decision maker.
+ */
+const approveAiSuggestion = async (
+	id: string,
+	evaluatorId: string,
+	companyId: string,
+) => {
+	const submission = await prisma.submission.findUnique({
+		where: { id },
+		include: {
+			evaluation: true,
+			attempt: {
+				select: {
+					id: true,
+					status: true,
+					assessment: { select: { companyId: true } },
+				},
+			},
+		},
+	});
+
+	if (!submission) {
+		throw new AppError(StatusCodes.NOT_FOUND, "Submission not found.");
+	}
+
+	assertCanGrade(
+		companyId,
+		submission.attempt.assessment.companyId,
+		"RECRUITER",
+	);
+
+	const evaluation = submission.evaluation;
+
+	if (
+		!evaluation ||
+		evaluation.reviewStatus !== "PENDING_REVIEW" ||
+		evaluation.aiScore === null
+	) {
+		throw new AppError(
+			StatusCodes.CONFLICT,
+			"There is no AI suggestion waiting for review on this submission.",
+		);
+	}
+
+	if (evaluation.status === "COMPLETED") {
+		throw new AppError(
+			StatusCodes.CONFLICT,
+			"This submission has already been graded.",
+		);
+	}
+
+	const aiScore = evaluation.aiScore;
+	const aiFeedback = evaluation.aiFeedback;
+
+	await prisma.$transaction([
+		prisma.submission.update({
+			where: { id },
+			data: { status: "EVALUATED" },
+		}),
+		prisma.submissionEvaluation.update({
+			where: { submissionId: id },
+			data: {
+				score: aiScore,
+				...(aiFeedback !== null && { feedback: aiFeedback }),
+				status: "COMPLETED",
+				isAutoEvaluated: false,
+				evaluatorId,
+				reviewStatus: "APPROVED",
+				reviewedAt: new Date(),
+				evaluatedAt: new Date(),
+			},
+		}),
+	]);
+
+	await recomputeResult(submission.attempt.id);
+
+	return prisma.submission.findUniqueOrThrow({
+		where: { id },
+		select: SUBMISSION_GRADING_SELECT,
+	});
+};
+
 export const evaluationService = {
 	getSubmissionsForAttempt,
 	getSubmissionById,
 	getPendingEvaluations,
 	evaluateSubmission,
+	approveAiSuggestion,
 };

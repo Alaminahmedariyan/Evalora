@@ -91,9 +91,27 @@ const evaluateSubmission = catchAsync(async (req: Request, res: Response) => {
 	});
 });
 
+const approveAiSuggestion = catchAsync(async (req: Request, res: Response) => {
+	const currentUser = req.user as AuthenticatedUser;
+	const companyId = (await getCompanyIdForUser(currentUser, req))!;
+
+	const submission = await evaluationService.approveAiSuggestion(
+		req.params.id as string,
+		currentUser.id,
+		companyId,
+	);
+
+	res.status(StatusCodes.OK).json({
+		success: true,
+		message: "AI suggestion approved.",
+		data: submission,
+	});
+});
+
 export const evaluationController = {
 	getSubmissionsForAttempt,
 	getSubmissionById,
 	getPendingEvaluations,
 	evaluateSubmission,
+	approveAiSuggestion,
 };

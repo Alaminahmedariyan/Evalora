@@ -1,4 +1,3 @@
-
 import "dotenv/config";
 import { z } from "zod";
 
@@ -65,6 +64,7 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((value) => value === "true"),
+  GEMINI_API_KEY: z.string().min(20).optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -161,6 +161,9 @@ const config = {
     webhookSecret: env.N8N_WEBHOOK_SECRET,
     apiKey: env.N8N_API_KEY,
     localDispatcher: env.AUTOMATION_LOCAL_DISPATCHER,
+  },
+  gemini: {
+    apiKey: env.GEMINI_API_KEY,
   },
 } as const;
 

@@ -28,4 +28,9 @@ router.patch(
 	evaluationController.evaluateSubmission,
 );
 
+router.post(
+	"/submissions/:id/approve-ai",
+	evaluationController.approveAiSuggestion,
+);
+
 export const evaluationRoutes = router;

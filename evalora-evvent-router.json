@@ -1,0 +1,629 @@
+{
+  "name": "Evalora Event Router",
+  "nodes": [
+    {
+      "id": "2b29321e-a9b1-4cc0-b21f-72ca05354e4e",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "e8755263-f8f3-4167-b207-9cbc8fdf7464",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "automation",
+        "responseMode": "onReceived",
+        "options": {}
+      }
+    },
+    {
+      "id": "89ef9e6c-550c-41a4-b8c5-528504002ee6",
+      "name": "Route by type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        260,
+        300
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "AI eval submission.needs_ai_evaluation",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "id": "866f2efc-71be-4a30-972f-327fbd607cc9",
+                    "leftValue": "={{ $json.body.type }}",
+                    "rightValue": "submission.needs_ai_evaluation",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "Report attempt.submitted",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "id": "5b8eca8a-f682-4c8d-b97b-5b3fea1a4159",
+                    "leftValue": "={{ $json.body.type }}",
+                    "rightValue": "attempt.submitted",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "Report attempt.auto_submitted",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "id": "aaaf9ade-c37a-4530-b630-2dec83b806a4",
+                    "leftValue": "={{ $json.body.type }}",
+                    "rightValue": "attempt.auto_submitted",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "Alert proctoring.high_risk",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "id": "e00bd307-33ca-4d5c-913b-0525c250378b",
+                    "leftValue": "={{ $json.body.type }}",
+                    "rightValue": "proctoring.high_risk",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "Alert evaluation.review_needed",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "id": "576f23f6-e946-4e7f-81ba-4030f8849c37",
+                    "leftValue": "={{ $json.body.type }}",
+                    "rightValue": "evaluation.review_needed",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "435f49bb-a930-40ef-819e-bdf3373b173f",
+      "name": "Get AI input",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        540,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://evalora-server.vercel.app/api/v1/internal/automation/submissions/{{ $json.body.aggregateId }}/ai-input",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.EVALORA_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "id": "c2cbbba1-7258-49db-be01-d4104b5a4a83",
+      "name": "AI eligible?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        780,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "869ed88f-9ebb-4a21-ad8b-40f42b07a4e8",
+              "leftValue": "={{ String($json.data.eligible) }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "a908b7ad-523e-4f24-9155-933146abe462",
+      "name": "Gemini grade",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1020,
+        -80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-goog-api-key",
+              "value": "={{ $env.GEMINI_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contents: [{ parts: [{ text: 'You grade a written answer. Reply as JSON {\"aiScore\": integer 0-' + $json.data.maxScore + ', \"aiFeedback\": short string}. Question: ' + $json.data.question + ' Rubric: ' + ($json.data.rubric || 'none') + ' Answer: ' + $json.data.answer }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.2 } }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "03f407ae-8c93-4243-b457-4955edc7a95e",
+      "name": "Parse grade",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1260,
+        -80
+      ],
+      "parameters": {
+        "jsCode": "const input = $('Get AI input').first().json.data;\nconst raw = $input.first().json.candidates[0].content.parts[0].text;\nconst parsed = JSON.parse(raw);\nconst score = Math.max(0, Math.min(input.maxScore, Math.round(Number(parsed.aiScore) || 0)));\nreturn [{ json: { aiScore: score, aiFeedback: String(parsed.aiFeedback || '').slice(0, 2000), aiModel: 'gemini-2.0-flash' } }];"
+      }
+    },
+    {
+      "id": "6f78ab95-8bd4-499b-8f58-9ee7db0bd7fb",
+      "name": "Save AI result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1500,
+        -80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://evalora-server.vercel.app/api/v1/internal/automation/submissions/{{ $('Webhook').first().json.body.aggregateId }}/ai-result",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.EVALORA_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      }
+    },
+    {
+      "id": "d2a88c38-6055-4142-a533-4eb94a275696",
+      "name": "Get report input",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        540,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://evalora-server.vercel.app/api/v1/internal/automation/attempts/{{ $json.body.aggregateId }}/report-input",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.EVALORA_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "id": "4080c7ff-5240-4a72-a6f2-9d9300fb0cf6",
+      "name": "AI eligible? (report)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        780,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "1c5b2edc-1ff2-4d1d-acd9-d6b2690b277a",
+              "leftValue": "={{ String($json.data.eligible) }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "44dc0ed7-5987-4b2d-90b7-da5d9621472a",
+      "name": "Gemini report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1020,
+        220
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-goog-api-key",
+              "value": "={{ $env.GEMINI_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contents: [{ parts: [{ text: 'You review a finished online assessment. Reply as JSON {\"riskLevel\": \"LOW\"|\"MEDIUM\"|\"HIGH\", \"riskSummary\": string, \"summary\": string, \"strengths\": string[], \"weaknesses\": string[], \"recommendation\": string}. Base riskLevel mainly on the heuristic level and say why. Data: ' + JSON.stringify($json.data) }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.2 } }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "3882ffac-5dd6-4c39-9b8d-6aae8dc6c825",
+      "name": "Parse report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1260,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.candidates[0].content.parts[0].text;\nconst p = JSON.parse(raw);\nconst level = ['LOW', 'MEDIUM', 'HIGH'].includes(p.riskLevel) ? p.riskLevel : 'LOW';\nreturn [{ json: { riskLevel: level, riskSummary: String(p.riskSummary || 'No summary.').slice(0, 1000), summary: String(p.summary || '').slice(0, 2000), strengths: (p.strengths || []).slice(0, 10).map(String), weaknesses: (p.weaknesses || []).slice(0, 10).map(String), recommendation: String(p.recommendation || '').slice(0, 1000), aiModel: 'gemini-2.0-flash' } }];"
+      }
+    },
+    {
+      "id": "4e03ff30-cb9a-4eb3-877f-d5b082e0c9e4",
+      "name": "Save report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1500,
+        220
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://evalora-server.vercel.app/api/v1/internal/automation/attempts/{{ $('Webhook').first().json.body.aggregateId }}/report-result",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.EVALORA_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      }
+    },
+    {
+      "id": "7d95b7ef-8859-43cc-a02e-4939ce1b9231",
+      "name": "Build heuristic report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1020,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json.data.proctoring;\nreturn [{ json: { riskLevel: d.heuristicRiskLevel, riskSummary: 'Rule-based risk score ' + d.heuristicRiskScore + ' (' + d.tabSwitchCount + ' tab switches).', aiModel: 'heuristic' } }];"
+      }
+    },
+    {
+      "id": "1c7a223e-a89c-4ce5-b47c-dfd15ea60956",
+      "name": "Save heuristic report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1260,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://evalora-server.vercel.app/api/v1/internal/automation/attempts/{{ $('Webhook').first().json.body.aggregateId }}/report-result",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.EVALORA_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      }
+    },
+    {
+      "id": "fbaf0dcc-62e5-49ce-849e-1f3d6b2543db",
+      "name": "Discord alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        540,
+        640
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DISCORD_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ content: ($json.body.type === 'proctoring.high_risk' ? 'High proctoring risk on attempt ' : 'AI evaluation ready for review: ') + $json.body.aggregateId }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Route by type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by type": {
+      "main": [
+        [
+          {
+            "node": "Get AI input",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get report input",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get report input",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Discord alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Discord alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get AI input": {
+      "main": [
+        [
+          {
+            "node": "AI eligible?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI eligible?": {
+      "main": [
+        [
+          {
+            "node": "Gemini grade",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini grade": {
+      "main": [
+        [
+          {
+            "node": "Parse grade",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse grade": {
+      "main": [
+        [
+          {
+            "node": "Save AI result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get report input": {
+      "main": [
+        [
+          {
+            "node": "AI eligible? (report)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI eligible? (report)": {
+      "main": [
+        [
+          {
+            "node": "Gemini report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build heuristic report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini report": {
+      "main": [
+        [
+          {
+            "node": "Parse report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse report": {
+      "main": [
+        [
+          {
+            "node": "Save report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build heuristic report": {
+      "main": [
+        [
+          {
+            "node": "Save heuristic report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
