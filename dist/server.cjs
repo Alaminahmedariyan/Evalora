@@ -12093,9 +12093,7 @@ var demoService = { demoLogin };
 
 // src/app/modules/demo/demo.controller.ts
 var demoLoginSchema = import_zod19.z.object({
-  body: import_zod19.z.object({
-    role: import_zod19.z.enum(["CANDIDATE", "RECRUITER", "ADMIN"])
-  })
+  role: import_zod19.z.enum(["CANDIDATE", "RECRUITER", "ADMIN"])
 });
 var demoLogin2 = catchAsync(async (req, res) => {
   const { data, headers } = await demoService.demoLogin(

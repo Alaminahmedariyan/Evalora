@@ -9,9 +9,7 @@ import { catchAsync } from "../../utils/catchAsync";
 import { demoService } from "./demo.service";
 
 export const demoLoginSchema = z.object({
-	body: z.object({
-		role: z.enum(["CANDIDATE", "RECRUITER", "ADMIN"]),
-	}),
+	role: z.enum(["CANDIDATE", "RECRUITER", "ADMIN"]),
 });
 
 const demoLogin = catchAsync(async (req: Request, res: Response) => {

@@ -12070,9 +12070,7 @@ var demoService = { demoLogin };
 
 // src/app/modules/demo/demo.controller.ts
 var demoLoginSchema = z18.object({
-  body: z18.object({
-    role: z18.enum(["CANDIDATE", "RECRUITER", "ADMIN"])
-  })
+  role: z18.enum(["CANDIDATE", "RECRUITER", "ADMIN"])
 });
 var demoLogin2 = catchAsync(async (req, res) => {
   const { data, headers } = await demoService.demoLogin(
